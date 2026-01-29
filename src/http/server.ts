@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import app from './routes.js';
 import { getConfig } from '../config/env.js';
 import { initDatabase, closeDatabase, cleanupExpiredJobs } from '../db/sqlite.js';
+import { startWorker, stopWorker } from '../queue/queue.js';
 
 // ========================================
 // Server Startup
@@ -26,6 +27,9 @@ async function startServer() {
   const cleanupInterval = setInterval(() => {
     cleanupExpiredJobs();
   }, config.cache.cleanupIntervalMs);
+
+  // Start translation worker
+  startWorker();
 
   // Start HTTP server
   serve({
@@ -49,6 +53,7 @@ async function startServer() {
   const shutdown = () => {
     console.log('\n[Server] Shutting down gracefully...');
     clearInterval(cleanupInterval);
+    stopWorker();
     closeDatabase();
     process.exit(0);
   };

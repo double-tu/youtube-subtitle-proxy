@@ -4,6 +4,9 @@
 import { Hono } from 'hono';
 import { getDatabase, getCacheStats } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
+import { fetchYouTubeSubtitle, generateCacheKey, generateSourceHash } from '../services/youtube.js';
+import { getBilingualSubtitle } from '../services/cache.js';
+import { enqueueTranslation, getQueueStatus } from '../queue/queue.js';
 import type { SubtitleRequest, ErrorResponse, HealthCheckResponse } from '../types/subtitle.js';
 
 const app = new Hono();
@@ -16,6 +19,7 @@ app.get('/health', (c) => {
   try {
     const db = getDatabase();
     const stats = getCacheStats();
+    const queueStatus = getQueueStatus();
 
     const cacheHitsRow = db.prepare(`
       SELECT value FROM cache_metadata WHERE key = 'cache_hits'
@@ -39,8 +43,8 @@ app.get('/health', (c) => {
         hitRate: parseFloat((hitRate * 100).toFixed(2)),
       },
       queue: {
-        pending: stats.pending_jobs,
-        processing: 0,  // Will be implemented with queue
+        pending: stats.pending_jobs + queueStatus.queueSize,
+        processing: queueStatus.isProcessing ? 1 : 0,
         failed: stats.failed_jobs,
       },
       uptime: process.uptime(),
@@ -73,7 +77,7 @@ app.get('/api/subtitle', async (c) => {
       lang: query.lang || '',
       tlang: query.tlang || 'zh-CN',
       kind: query.kind || 'asr',
-      fmt: query.fmt || 'vtt',
+      fmt: query.fmt || 'json3',
       original_url: query.original_url,
     };
 
@@ -94,16 +98,70 @@ app.get('/api/subtitle', async (c) => {
       return c.json(error, 400);
     }
 
-    // TODO: Implement cache check
-    // TODO: Implement YouTube fetch
-    // TODO: Implement translation queue
+    // Generate cache key
+    const cacheKey = generateCacheKey(params);
 
-    // Temporary response
-    return c.text('WEBVTT\n\nWIP: Subtitle proxy implementation in progress', 200, {
-      'Content-Type': 'text/vtt; charset=utf-8',
+    // Check bilingual subtitle cache
+    const cachedBilingual = await getBilingualSubtitle(cacheKey);
+
+    if (cachedBilingual) {
+      console.log(`[API] Cache hit for ${params.v} (${params.lang} -> ${params.tlang})`);
+
+      // Return cached bilingual subtitle
+      return c.text(cachedBilingual, 200, {
+        'Content-Type': 'text/vtt; charset=utf-8',
+        'X-Translation-Status': 'completed',
+        'X-Cache-Status': 'HIT',
+        'X-Video-Id': params.v,
+      });
+    }
+
+    console.log(`[API] Cache miss for ${params.v} (${params.lang} -> ${params.tlang})`);
+
+    // Fetch original subtitle from YouTube
+    let originalJson;
+    try {
+      originalJson = await fetchYouTubeSubtitle(params);
+    } catch (error) {
+      console.error(`[API] Failed to fetch YouTube subtitle:`, error);
+
+      const errorResponse: ErrorResponse = {
+        error: 'youtube_api_error',
+        message: error instanceof Error ? error.message : 'Failed to fetch subtitle from YouTube',
+      };
+
+      return c.json(errorResponse, 503);
+    }
+
+    // Generate source hash
+    const sourceHash = generateSourceHash(JSON.stringify(originalJson));
+
+    // Enqueue translation task (async, non-blocking)
+    enqueueTranslation(params, originalJson, sourceHash).catch(error => {
+      console.error(`[API] Failed to enqueue translation:`, error);
+    });
+
+    // Return original subtitle immediately
+    // Convert format if needed
+    let responseContent: string;
+    let contentType: string;
+
+    if (params.fmt === 'vtt') {
+      // Convert JSON to WebVTT (simplified - would need full implementation)
+      responseContent = 'WEBVTT\n\n[Original subtitle - translation in progress]';
+      contentType = 'text/vtt; charset=utf-8';
+    } else {
+      // Return original JSON
+      responseContent = JSON.stringify(originalJson);
+      contentType = 'application/json; charset=utf-8';
+    }
+
+    return c.text(responseContent, 200, {
+      'Content-Type': contentType,
       'X-Translation-Status': 'pending',
       'X-Cache-Status': 'MISS',
       'X-Video-Id': params.v,
+      'X-Estimated-Time': '45',
     });
 
   } catch (error) {
