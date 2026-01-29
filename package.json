@@ -1,0 +1,49 @@
+{
+  "name": "youtube-subtitle-proxy",
+  "version": "1.0.0",
+  "description": "YouTube subtitle proxy with AI-powered bilingual translation",
+  "type": "module",
+  "main": "dist/http/server.js",
+  "scripts": {
+    "dev": "tsx watch src/http/server.ts",
+    "build": "tsc",
+    "start": "node dist/http/server.js",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "keywords": [
+    "youtube",
+    "subtitle",
+    "translation",
+    "proxy",
+    "openai",
+    "gpt-4o"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "better-sqlite3": "^9.4.0",
+    "hono": "^4.0.0",
+    "lru-cache": "^10.2.0",
+    "openai": "^4.28.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.9",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "@vitest/ui": "^1.2.0",
+    "eslint": "^8.56.0",
+    "prettier": "^3.2.4",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
