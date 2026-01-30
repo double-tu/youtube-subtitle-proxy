@@ -2,7 +2,6 @@
  * HTTP Routes
  */
 import { Hono, type Context } from 'hono';
-import { cors } from 'hono/cors';
 import { getDatabase, getCacheStats } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
 import { fetchYouTubeTimedText, generateCacheKey, generateSourceHash } from '../services/youtube.js';
@@ -18,11 +17,20 @@ import { renderYouTubeSrv3, renderYouTubeTimedText } from '../subtitle/render.js
 import type { SubtitleRequest, ErrorResponse, HealthCheckResponse } from '../types/subtitle.js';
 
 const app = new Hono();
-app.use('*', cors({
-  origin: '*',
-  allowMethods: ['GET', 'POST', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
-}));
+app.use('*', async (c, next) => {
+  const origin = c.req.header('Origin') ?? '*';
+  const requestHeaders = c.req.header('Access-Control-Request-Headers');
+
+  c.header('Access-Control-Allow-Origin', origin);
+  c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  c.header('Access-Control-Allow-Headers', requestHeaders ?? 'Content-Type, Authorization');
+
+  if (c.req.method === 'OPTIONS') {
+    return c.body(null, 204);
+  }
+
+  await next();
+});
 
 // ========================================
 // Health Check
