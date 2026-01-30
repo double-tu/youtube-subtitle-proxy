@@ -15,6 +15,8 @@ export function mergeSubtitleCues(
     minDurationMs?: number;
     maxDurationMs?: number;
     gapThresholdMs?: number;
+    maxChars?: number;
+    maxWords?: number;
   }
 ): SubtitleCue[] {
   if (cues.length === 0) {
@@ -22,79 +24,101 @@ export function mergeSubtitleCues(
   }
 
   const config = getConfig();
-  const minDuration = options?.minDurationMs || config.subtitle.minDurationMs;
-  const maxDuration = options?.maxDurationMs || config.subtitle.maxDurationMs;
-  const gapThreshold = options?.gapThresholdMs || config.subtitle.segmentGapMs;
+  const minDuration = options?.minDurationMs ?? config.subtitle.minDurationMs;
+  const maxDuration = options?.maxDurationMs ?? config.subtitle.maxDurationMs;
+  const gapThreshold = options?.gapThresholdMs ?? config.subtitle.segmentGapMs;
+  const maxChars = options?.maxChars ?? config.subtitle.segmentMaxChars;
+  const maxWords = options?.maxWords ?? config.subtitle.segmentMaxWords;
 
   const merged: SubtitleCue[] = [];
   let currentGroup: string[] = [];
   let groupStartTime: number | null = null;
   let groupEndTime: number | null = null;
   let lastEndTime: number | null = null;
+  let currentChars = 0;
+  let currentWords = 0;
 
   for (const cue of cues) {
+    const normalizedText = cue.text.trim();
+    if (!normalizedText) {
+      continue;
+    }
+
     if (groupStartTime === null) {
       // Start new paragraph
       groupStartTime = cue.startTime;
       groupEndTime = cue.endTime;
-      currentGroup.push(cue.text);
+      currentGroup = [normalizedText];
+      currentChars = normalizedText.length;
+      currentWords = countWords(normalizedText);
       lastEndTime = cue.endTime;
-    } else {
-      const currentDuration = cue.endTime - groupStartTime;
-      const gap = cue.startTime - lastEndTime!;
-      const endsWithPunctuation = shouldBreakOnPunctuation(currentGroup[currentGroup.length - 1]);
+      continue;
+    }
 
-      // Check if we should start a new paragraph
-      if (
-        currentDuration > maxDuration ||
-        gap > gapThreshold ||
-        (endsWithPunctuation && currentDuration >= minDuration)
-      ) {
-        // Save current paragraph
-        if (groupEndTime! - groupStartTime >= minDuration) {
-          merged.push({
-            startTime: groupStartTime,
-            endTime: groupEndTime!,
-            text: currentGroup.join(' ').trim(),
-          });
-        }
+    const gap = cue.startTime - lastEndTime!;
+    const durationWithCue = cue.endTime - groupStartTime;
+    const charsWithCue = currentChars + normalizedText.length + 1;
+    const wordsWithCue = currentWords + countWords(normalizedText);
 
-        // Start new paragraph
-        groupStartTime = cue.startTime;
-        groupEndTime = cue.endTime;
-        currentGroup = [cue.text];
-        lastEndTime = cue.endTime;
-      } else {
-        // Continue current paragraph
-        groupEndTime = cue.endTime;
-        currentGroup.push(cue.text);
-        lastEndTime = cue.endTime;
-      }
+    const shouldHardBreak = durationWithCue >= maxDuration || gap > gapThreshold;
+    if (shouldHardBreak) {
+      merged.push({
+        startTime: groupStartTime,
+        endTime: groupEndTime!,
+        text: normalizeMergedText(currentGroup.join(' ')),
+      });
+
+      groupStartTime = cue.startTime;
+      groupEndTime = cue.endTime;
+      currentGroup = [normalizedText];
+      currentChars = normalizedText.length;
+      currentWords = countWords(normalizedText);
+      lastEndTime = cue.endTime;
+      continue;
+    }
+
+    // Continue current paragraph
+    groupEndTime = cue.endTime;
+    currentGroup.push(normalizedText);
+    lastEndTime = cue.endTime;
+    currentChars = charsWithCue;
+    currentWords = wordsWithCue;
+
+    const exceedsMaxChars = maxChars > 0 && currentChars >= maxChars;
+    const exceedsMaxWords = maxWords > 0 && currentWords >= maxWords;
+    const shouldSoftBreak = durationWithCue >= minDuration
+      && (shouldBreakOnPunctuation(normalizedText) || exceedsMaxChars || exceedsMaxWords);
+
+    if (shouldSoftBreak) {
+      merged.push({
+        startTime: groupStartTime,
+        endTime: groupEndTime!,
+        text: normalizeMergedText(currentGroup.join(' ')),
+      });
+
+      groupStartTime = null;
+      groupEndTime = null;
+      lastEndTime = null;
+      currentGroup = [];
+      currentChars = 0;
+      currentWords = 0;
     }
   }
 
   // Save last paragraph
   if (currentGroup.length > 0 && groupStartTime !== null && groupEndTime !== null) {
-    if (groupEndTime - groupStartTime >= minDuration) {
+    const normalizedText = normalizeMergedText(currentGroup.join(' '));
+
+    if (groupEndTime - groupStartTime < minDuration && merged.length > 0) {
+      const lastMerged = merged[merged.length - 1];
+      lastMerged.endTime = groupEndTime;
+      lastMerged.text = normalizeMergedText(`${lastMerged.text} ${normalizedText}`);
+    } else {
       merged.push({
         startTime: groupStartTime,
         endTime: groupEndTime,
-        text: currentGroup.join(' ').trim(),
+        text: normalizedText,
       });
-    } else {
-      // If last segment is too short, try to merge with previous
-      if (merged.length > 0) {
-        const lastMerged = merged[merged.length - 1];
-        lastMerged.endTime = groupEndTime;
-        lastMerged.text += ' ' + currentGroup.join(' ').trim();
-      } else {
-        // No previous segment, keep it anyway
-        merged.push({
-          startTime: groupStartTime,
-          endTime: groupEndTime,
-          text: currentGroup.join(' ').trim(),
-        });
-      }
     }
   }
 
@@ -121,6 +145,24 @@ function shouldBreakOnPunctuation(text: string): boolean {
   }
 
   return false;
+}
+
+function normalizeMergedText(text: string): string {
+  return text
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\s+([，。！？；：])/g, '$1')
+    .replace(/([([{“‘])\s+/g, '$1')
+    .replace(/\s+([)\]}'"”’])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function countWords(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  return trimmed.split(/\s+/).length;
 }
 
 /**

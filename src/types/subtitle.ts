@@ -134,6 +134,14 @@ export interface AppConfig {
     chunkChars: number;
   };
 
+  translationContext: {
+    enabled: boolean;
+    batchSize: number;
+    precedingContextLines: number;
+    followingContextLines: number;
+    maxTokens: number;
+  };
+
   database: {
     path: string;
     verbose: boolean;
@@ -160,6 +168,8 @@ export interface AppConfig {
     minDurationMs: number;
     maxDurationMs: number;
     srv3OverlapGapMs: number;
+    segmentMaxChars: number;
+    segmentMaxWords: number;
   };
 
   admin: {

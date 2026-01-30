@@ -25,6 +25,11 @@ const envSchema = z.object({
   TRANSLATION_SUMMARY_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   TRANSLATION_SUMMARY_MAX_TOKENS: z.string().default('200').transform(Number),
   TRANSLATION_SUMMARY_CHUNK_CHARS: z.string().default('12000').transform(Number),
+  TRANSLATION_CONTEXT_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  TRANSLATION_CONTEXT_BATCH_SIZE: z.string().default('8').transform(Number),
+  TRANSLATION_CONTEXT_PRECEDING_LINES: z.string().default('4').transform(Number),
+  TRANSLATION_CONTEXT_FOLLOWING_LINES: z.string().default('2').transform(Number),
+  TRANSLATION_CONTEXT_MAX_TOKENS: z.string().default('800').transform(Number),
 
   // Database
   DB_PATH: z.string().default('./data/subtitles.db'),
@@ -46,6 +51,8 @@ const envSchema = z.object({
   SEGMENT_GAP_MS: z.string().default('1200').transform(Number),
   SEGMENT_MIN_DURATION_MS: z.string().default('3000').transform(Number),
   SEGMENT_MAX_DURATION_MS: z.string().default('7000').transform(Number),
+  SEGMENT_MAX_CHARS: z.string().default('160').transform(Number),
+  SEGMENT_MAX_WORDS: z.string().default('30').transform(Number),
   SRV3_OVERLAP_GAP_MS: z.string().default('100').transform(Number),
 
   // Admin (optional)
@@ -85,6 +92,14 @@ function loadEnv(): AppConfig {
       chunkChars: env.TRANSLATION_SUMMARY_CHUNK_CHARS,
     },
 
+    translationContext: {
+      enabled: env.TRANSLATION_CONTEXT_ENABLED,
+      batchSize: env.TRANSLATION_CONTEXT_BATCH_SIZE,
+      precedingContextLines: env.TRANSLATION_CONTEXT_PRECEDING_LINES,
+      followingContextLines: env.TRANSLATION_CONTEXT_FOLLOWING_LINES,
+      maxTokens: env.TRANSLATION_CONTEXT_MAX_TOKENS,
+    },
+
     database: {
       path: env.DB_PATH,
       verbose: env.DB_VERBOSE,
@@ -111,6 +126,8 @@ function loadEnv(): AppConfig {
       minDurationMs: env.SEGMENT_MIN_DURATION_MS,
       maxDurationMs: env.SEGMENT_MAX_DURATION_MS,
       srv3OverlapGapMs: env.SRV3_OVERLAP_GAP_MS,
+      segmentMaxChars: env.SEGMENT_MAX_CHARS,
+      segmentMaxWords: env.SEGMENT_MAX_WORDS,
     },
 
     admin: {
