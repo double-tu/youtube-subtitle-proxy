@@ -37,8 +37,8 @@ services:
       # Admin
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
     volumes:
-      # Persist SQLite database
-      - ./data:/app/data
+      # Persist SQLite database (named volume avoids host permission issues)
+      - subtitles-data:/app/data
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
@@ -50,3 +50,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  subtitles-data:
