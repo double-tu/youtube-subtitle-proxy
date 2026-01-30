@@ -18,6 +18,7 @@ const envSchema = z.object({
 
   // OpenAI
   OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
+  OPENAI_BASE_URL: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-4o'),
   TRANSLATE_TIMEOUT_MS: z.string().default('20000').transform(Number),
   QUEUE_CONCURRENCY: z.string().default('2').transform(Number),
@@ -69,6 +70,7 @@ function loadEnv(): AppConfig {
 
     openai: {
       apiKey: env.OPENAI_API_KEY,
+      baseUrl: env.OPENAI_BASE_URL,
       model: env.OPENAI_MODEL,
       timeout: env.TRANSLATE_TIMEOUT_MS,
     },

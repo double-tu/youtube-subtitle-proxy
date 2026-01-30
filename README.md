@@ -22,7 +22,23 @@ npm install
 
 ```bash
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env and configure:
+# - OPENAI_API_KEY: Your OpenAI API key
+# - OPENAI_BASE_URL: (Optional) Custom API endpoint (default: https://api.openai.com/v1)
+```
+
+**Custom API Endpoint**:
+You can use OpenAI-compatible services (like Azure OpenAI, third-party proxies, or local LLM servers) by setting `OPENAI_BASE_URL`:
+
+```bash
+# Example: Azure OpenAI
+OPENAI_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
+
+# Example: Third-party proxy
+OPENAI_BASE_URL=https://api.your-proxy.com/v1
+
+# Example: Local LLM server (e.g., LocalAI, vLLM)
+OPENAI_BASE_URL=http://localhost:8080/v1
 ```
 
 ### 3. Run Development Server

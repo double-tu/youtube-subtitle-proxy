@@ -17,6 +17,7 @@ function getOpenAIClient(): OpenAI {
     const config = getConfig();
     openaiClient = new OpenAI({
       apiKey: config.openai.apiKey,
+      baseURL: config.openai.baseUrl,
       timeout: config.openai.timeout,
     });
   }

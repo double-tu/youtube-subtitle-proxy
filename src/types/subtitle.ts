@@ -115,6 +115,7 @@ export interface AppConfig {
 
   openai: {
     apiKey: string;
+    baseUrl?: string;
     model: string;
     timeout: number;
   };
