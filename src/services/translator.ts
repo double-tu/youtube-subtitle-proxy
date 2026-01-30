@@ -86,6 +86,8 @@ export async function translateBatch(
   const config = getConfig();
   const actualConcurrency = Math.min(concurrency, config.queue.concurrency);
 
+  console.log(`[Translator] Starting translation: ${cues.length} segments, concurrency=${actualConcurrency}`);
+
   for (let i = 0; i < cues.length; i += actualConcurrency) {
     const batch = cues.slice(i, i + actualConcurrency);
 
@@ -106,12 +108,18 @@ export async function translateBatch(
     const batchResults = await Promise.all(promises);
     results.push(...batchResults);
 
+    // Progress logging
+    const progress = Math.min(i + actualConcurrency, cues.length);
+    const percentage = ((progress / cues.length) * 100).toFixed(1);
+    console.log(`[Translator] Progress: ${progress}/${cues.length} (${percentage}%)`);
+
     // Small delay between batches to avoid rate limiting
     if (i + actualConcurrency < cues.length) {
       await sleep(200);
     }
   }
 
+  console.log(`[Translator] Translation completed: ${results.length} segments`);
   return results;
 }
 

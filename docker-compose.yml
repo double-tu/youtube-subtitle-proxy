@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  youtube-subtitle-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: youtube-subtitle-proxy
+    restart: unless-stopped
+    ports:
+      - "12033:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # OpenAI API Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - TRANSLATE_TIMEOUT_MS=${TRANSLATE_TIMEOUT_MS:-20000}
+      # Queue Configuration
+      - QUEUE_CONCURRENCY=${QUEUE_CONCURRENCY:-16}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_BASE_MS=${RETRY_BASE_MS:-5000}
+      # Cache Configuration
+      - CACHE_TTL_HOURS=${CACHE_TTL_HOURS:-720}
+      - LRU_MAX_ITEMS=${LRU_MAX_ITEMS:-1000}
+      - CLEANUP_INTERVAL_MS=${CLEANUP_INTERVAL_MS:-3600000}
+      # Database
+      - DB_PATH=/app/data/subtitles.db
+      - DB_VERBOSE=${DB_VERBOSE:-false}
+      # YouTube
+      - YT_FETCH_TIMEOUT_MS=${YT_FETCH_TIMEOUT_MS:-5000}
+      # Subtitle
+      - SEGMENT_GAP_MS=${SEGMENT_GAP_MS:-1200}
+      - SEGMENT_MIN_DURATION_MS=${SEGMENT_MIN_DURATION_MS:-3000}
+      - SEGMENT_MAX_DURATION_MS=${SEGMENT_MAX_DURATION_MS:-7000}
+      # Admin
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+    volumes:
+      # Persist SQLite database
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
