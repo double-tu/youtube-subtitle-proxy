@@ -145,6 +145,8 @@ export interface AppConfig {
     batchSize: number;
     precedingContextLines: number;
     followingContextLines: number;
+    concurrency: number;
+    batchRetries: number;
     maxTokens: number;
   };
 

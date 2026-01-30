@@ -463,71 +463,147 @@ export async function translateBatchWithContext(
   const followingLines = Math.max(0, config.translationContext.followingContextLines);
   const maxTokens = config.translationContext.maxTokens;
   const totalBatches = Math.max(1, Math.ceil(cues.length / batchSize));
+  const batchConcurrency = Math.max(
+    1,
+    Math.min(config.translationContext.concurrency, totalBatches)
+  );
+  const batchRetries = Math.max(0, config.translationContext.batchRetries);
   const overallStart = Date.now();
 
   const translatedTexts: Array<string | null> = new Array(cues.length).fill(null);
 
   console.log(
-    `[Translator] Context-aware translation started: ${cues.length} segments, batches=${totalBatches}, batchSize=${batchSize}, preceding=${precedingLines}, following=${followingLines}`
+    `[Translator] Context-aware translation started: ${cues.length} segments, batches=${totalBatches}, batchSize=${batchSize}, concurrency=${batchConcurrency}, retries=${batchRetries}, preceding=${precedingLines}, following=${followingLines}`
   );
 
   try {
+    const ranges: Array<{ start: number; end: number; batchIndex: number }> = [];
     for (let start = 0; start < cues.length; start += batchSize) {
       const end = Math.min(start + batchSize, cues.length);
       const batchIndex = Math.floor(start / batchSize) + 1;
-      const batchStart = Date.now();
+      ranges.push({ start, end, batchIndex });
+    }
 
+    let nextRangeIndex = 0;
+
+    const fallbackBatch = async (
+      range: { start: number; end: number; batchIndex: number },
+      reason: string
+    ) => {
+      const { start, end, batchIndex } = range;
+      console.warn(
+        `[Translator] Context batch ${batchIndex}/${totalBatches} failed after ${batchRetries + 1} attempts: ${reason}. Falling back to per-line translation for segments ${start}-${end - 1}`
+      );
+
+      const lines = cues.slice(start, end);
+      const translations = await Promise.all(lines.map(async (cue, offset) => {
+        try {
+          return await translateText(
+            cue.text,
+            targetLang,
+            summary || undefined,
+            glossary || undefined
+          );
+        } catch (error) {
+          console.error(
+            `[Translator] Fallback translation failed for segment ${start + offset}:`,
+            error
+          );
+          return cue.text;
+        }
+      }));
+
+      for (let i = 0; i < translations.length; i++) {
+        translatedTexts[start + i] = translations[i];
+      }
+
+      console.log(
+        `[Translator] Fallback translation completed: segments ${start}-${end - 1}`
+      );
+    };
+
+    const runBatch = async (range: { start: number; end: number; batchIndex: number }) => {
+      const { start, end, batchIndex } = range;
       console.log(
         `[Translator] Context batch ${batchIndex}/${totalBatches} started: segments ${start}-${end - 1}`
       );
 
-      const batch = buildContextBatch(
-        cues,
-        start,
-        end,
-        precedingLines,
-        followingLines
-      );
+      for (let attempt = 0; attempt <= batchRetries; attempt++) {
+        const batchStart = Date.now();
 
-      const prompt = buildContextualTranslationPrompt(
-        batch,
-        targetLanguage,
-        summary || undefined,
-        glossary || undefined
-      );
+        try {
+          const batch = buildContextBatch(
+            cues,
+            start,
+            end,
+            precedingLines,
+            followingLines
+          );
 
-      const response = await client.chat.completions.create({
-        model: config.openai.model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        max_tokens: maxTokens,
-      });
+          const prompt = buildContextualTranslationPrompt(
+            batch,
+            targetLanguage,
+            summary || undefined,
+            glossary || undefined
+          );
 
-      const content = response.choices[0]?.message?.content?.trim();
-      if (!content) {
-        throw new Error('Empty translation response from OpenAI');
-      }
+          const response = await client.chat.completions.create({
+            model: config.openai.model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            max_tokens: maxTokens,
+          });
 
-      const parsed = parseTranslationBatch(content, batch.current.length);
+          const content = response.choices[0]?.message?.content?.trim();
+          if (!content) {
+            throw new Error('Empty translation response from OpenAI');
+          }
 
-      const expectedIds = new Set(batch.current.map(item => item.index));
-      for (const item of parsed) {
-        if (!expectedIds.has(item.id)) {
-          throw new Error(`Unexpected translation id ${item.id} in batch ${start}-${end - 1}`);
+          const parsed = parseTranslationBatch(content, batch.current.length);
+
+          const expectedIds = new Set(batch.current.map(item => item.index));
+          for (const item of parsed) {
+            if (!expectedIds.has(item.id)) {
+              throw new Error(`Unexpected translation id ${item.id} in batch ${start}-${end - 1}`);
+            }
+            translatedTexts[item.id] = item.translation;
+          }
+
+          for (const id of expectedIds) {
+            if (!translatedTexts[id]) {
+              throw new Error(`Missing translation for id ${id} in batch ${start}-${end - 1}`);
+            }
+          }
+
+          console.log(
+            `[Translator] Context batch ${batchIndex}/${totalBatches} completed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1})`
+          );
+          return;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(
+            `[Translator] Context batch ${batchIndex}/${totalBatches} failed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1}): ${message}`
+          );
+
+          if (attempt >= batchRetries) {
+            await fallbackBatch(range, message);
+            return;
+          }
         }
-        translatedTexts[item.id] = item.translation;
       }
+    };
 
-      for (const id of expectedIds) {
-        if (!translatedTexts[id]) {
-          throw new Error(`Missing translation for id ${id} in batch ${start}-${end - 1}`);
+    const workers = Array.from({ length: batchConcurrency }, async () => {
+      while (true) {
+        const rangeIndex = nextRangeIndex++;
+        if (rangeIndex >= ranges.length) {
+          break;
         }
+        await runBatch(ranges[rangeIndex]);
       }
+    });
 
-      console.log(
-        `[Translator] Context batch ${batchIndex}/${totalBatches} completed in ${Date.now() - batchStart}ms`
-      );
-    }
+    await Promise.all(workers);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(

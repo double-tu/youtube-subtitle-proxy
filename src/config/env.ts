@@ -32,6 +32,8 @@ const envSchema = z.object({
   TRANSLATION_CONTEXT_BATCH_SIZE: z.string().default('8').transform(Number),
   TRANSLATION_CONTEXT_PRECEDING_LINES: z.string().default('4').transform(Number),
   TRANSLATION_CONTEXT_FOLLOWING_LINES: z.string().default('2').transform(Number),
+  TRANSLATION_CONTEXT_CONCURRENCY: z.string().default('2').transform(Number),
+  TRANSLATION_CONTEXT_BATCH_RETRIES: z.string().default('1').transform(Number),
   TRANSLATION_CONTEXT_MAX_TOKENS: z.string().default('800').transform(Number),
 
   // Database
@@ -105,6 +107,8 @@ function loadEnv(): AppConfig {
       batchSize: env.TRANSLATION_CONTEXT_BATCH_SIZE,
       precedingContextLines: env.TRANSLATION_CONTEXT_PRECEDING_LINES,
       followingContextLines: env.TRANSLATION_CONTEXT_FOLLOWING_LINES,
+      concurrency: env.TRANSLATION_CONTEXT_CONCURRENCY,
+      batchRetries: env.TRANSLATION_CONTEXT_BATCH_RETRIES,
       maxTokens: env.TRANSLATION_CONTEXT_MAX_TOKENS,
     },
 

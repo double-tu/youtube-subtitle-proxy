@@ -81,6 +81,7 @@ describe('translator context batching', () => {
       TRANSLATION_CONTEXT_BATCH_SIZE: '2',
       TRANSLATION_CONTEXT_PRECEDING_LINES: '1',
       TRANSLATION_CONTEXT_FOLLOWING_LINES: '1',
+      TRANSLATION_CONTEXT_CONCURRENCY: '1',
       TRANSLATION_SUMMARY_ENABLED: 'false',
       TRANSLATION_GLOSSARY_ENABLED: 'false',
     });
@@ -105,5 +106,67 @@ describe('translator context batching', () => {
     expect(secondPrompt).toContain('Preceding Context (Original)');
     expect(secondPrompt).toContain('[1] This is a test.');
     expect(secondPrompt).toContain('[2] Final line.');
+  });
+
+  it('retries failed batches then falls back to per-line translation', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '[{"id":0,"translation":"T0"},{"id":1,"translation":"T1"}]',
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '[{"id":2,"translation":"T2"}]',
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '[{"id":2,"translation":"T2"}]',
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'FB2' } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: 'FB3' } }] });
+
+    const { translateToBilingual } = await loadTranslator({
+      TRANSLATION_CONTEXT_ENABLED: 'true',
+      TRANSLATION_CONTEXT_BATCH_SIZE: '2',
+      TRANSLATION_CONTEXT_PRECEDING_LINES: '0',
+      TRANSLATION_CONTEXT_FOLLOWING_LINES: '0',
+      TRANSLATION_CONTEXT_CONCURRENCY: '1',
+      TRANSLATION_CONTEXT_BATCH_RETRIES: '1',
+      TRANSLATION_SUMMARY_ENABLED: 'false',
+      TRANSLATION_GLOSSARY_ENABLED: 'false',
+    });
+
+    const cues = [
+      { startTime: 0, endTime: 1000, text: 'First.' },
+      { startTime: 1000, endTime: 2000, text: 'Second.' },
+      { startTime: 2000, endTime: 3000, text: 'Third.' },
+      { startTime: 3000, endTime: 4000, text: 'Fourth.' },
+    ];
+
+    const results = await translateToBilingual(cues, 'zh-CN', 2);
+
+    expect(results.map(cue => cue.text)).toEqual([
+      'First.\nT0',
+      'Second.\nT1',
+      'Third.\nFB2',
+      'Fourth.\nFB3',
+    ]);
+
+    expect(mockCreate).toHaveBeenCalledTimes(5);
   });
 });
