@@ -81,8 +81,9 @@ echo "  4) 仅停止服务"
 echo "  5) 查看服务状态"
 echo "  6) 查看日志"
 echo "  7) 清理全部缓存 (删除数据库)"
+echo "  8) 重启服务 (不构建)"
 echo ""
-read -p "请输入选项 (1-7): " choice
+read -p "请输入选项 (1-8): " choice
 
 case $choice in
     1)
@@ -133,6 +134,13 @@ case $choice in
         docker-compose up -d
         echo ""
         echo "✅ 缓存已清理并重启服务！"
+        ;;
+    8)
+        echo ""
+        echo "🔁 重启服务..."
+        docker-compose restart
+        echo ""
+        echo "✅ 服务已重启！"
         ;;
     *)
         echo "❌ 无效选项"

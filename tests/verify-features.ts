@@ -1,7 +1,7 @@
 /**
  * Feature Verification Tests
  */
-import { parseYouTubeTimedText, validateCues } from '../src/subtitle/parse.js';
+import { parseYouTubeSrv3, parseYouTubeTimedText, validateCues } from '../src/subtitle/parse.js';
 import { mergeSubtitleCues } from '../src/subtitle/segment.js';
 import { renderWebVTT, renderYouTubeSrv3, createBilingualCue } from '../src/subtitle/render.js';
 import { generateCacheKey, generateSourceHash } from '../src/services/youtube.js';
@@ -65,6 +65,15 @@ const srv3 = renderYouTubeSrv3([bilingualCue]);
 const srv3HasSpans = srv3.includes('<s t="0">') && srv3.includes('&#x0A;');
 console.log(`  SRV3 uses <s> spans: ${srv3HasSpans ? 'PASS' : 'FAIL'}`);
 console.log(`  SRV3 preview:\n${srv3.split('\\n').slice(0, 14).join('\\n')}\n`);
+
+const overlapCues = [
+  createBilingualCue(0, 5000, 'First line', '第一行'),
+  createBilingualCue(3000, 8000, 'Second line', '第二行'),
+];
+const overlapSrv3 = renderYouTubeSrv3(overlapCues);
+const overlapParsed = parseYouTubeSrv3(overlapSrv3);
+const noOverlap = overlapParsed.length === 2 && overlapParsed[0].endTime <= overlapParsed[1].startTime;
+console.log(`  SRV3 overlap clamp: ${noOverlap ? 'PASS' : 'FAIL'}`);
 
 // Test 4: Cache Key Generation
 console.log('✅ Test 4: Cache Key Generation');

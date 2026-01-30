@@ -137,7 +137,10 @@ const handleSubtitleRequest = async (c: Context) => {
 
       const cues = parseWebVTT(cachedBilingual);
       if (requestedFormat?.startsWith('srv')) {
-        const srv3 = renderYouTubeSrv3(cues);
+        const config = getConfig();
+        const srv3 = renderYouTubeSrv3(cues, {
+          overlapGapMs: config.subtitle.srv3OverlapGapMs,
+        });
         return c.text(srv3, 200, {
           'Content-Type': 'text/xml; charset=utf-8',
           'X-Translation-Status': 'completed',

@@ -63,7 +63,12 @@ export function renderYouTubeTimedText(cues: SubtitleCue[]): YouTubeTimedTextRes
 /**
  * Render subtitle cues to YouTube timedtext SRV3 XML format
  */
-export function renderYouTubeSrv3(cues: SubtitleCue[]): string {
+export function renderYouTubeSrv3(
+  cues: SubtitleCue[],
+  options?: {
+    overlapGapMs?: number;
+  }
+): string {
   let xml = '<?xml version="1.0" encoding="utf-8" ?>\n';
   xml += '<timedtext format="3">\n';
   xml += '  <head>\n';
@@ -76,9 +81,21 @@ export function renderYouTubeSrv3(cues: SubtitleCue[]): string {
   xml += '  <body>\n';
   xml += '    <w t="0" id="1" wp="1" ws="1"/>\n';
 
-  for (const cue of cues) {
+  const overlapGapMs = Math.max(0, options?.overlapGapMs ?? 100);
+  for (let i = 0; i < cues.length; i++) {
+    const cue = cues[i];
+    const nextCue = cues[i + 1];
     const start = Math.floor(cue.startTime);
-    const duration = Math.max(0, Math.floor(cue.endTime - cue.startTime));
+    let duration = Math.max(0, Math.floor(cue.endTime - cue.startTime));
+
+    if (nextCue) {
+      const nextStart = Math.floor(nextCue.startTime);
+      const maxDuration = nextStart - overlapGapMs - start;
+      if (Number.isFinite(maxDuration)) {
+        duration = Math.min(duration, Math.max(0, maxDuration));
+      }
+    }
+
     const lines = cue.text.split(/\r?\n/);
     const primaryLine = lines[0] ?? '';
     const secondaryLine = lines.slice(1).join(' ').trim();

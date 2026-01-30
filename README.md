@@ -160,6 +160,7 @@ OPENAI_MODEL=llama3-chinese
 | `SEGMENT_GAP_MS` | 1200 | 段落间隙阈值（毫秒） |
 | `SEGMENT_MIN_DURATION_MS` | 3000 | 最小段落时长（毫秒） |
 | `SEGMENT_MAX_DURATION_MS` | 7000 | 最大段落时长（毫秒） |
+| `SRV3_OVERLAP_GAP_MS` | 100 | SRV3 字幕重叠缓冲（毫秒），避免 App 合并相邻行 |
 
 ### 完整配置示例
 

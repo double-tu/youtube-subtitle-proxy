@@ -146,11 +146,13 @@ async function summarizeTranscript(
 
   try {
     if (chunks.length === 1) {
-      return await requestSummary(
+      const summary = await requestSummary(
         client,
         buildSummaryPrompt(chunks[0], targetLanguage, 'full'),
         maxTokens
       );
+      console.log(`[Translator] Summary generated:\n${summary}`);
+      return summary;
     }
 
     const chunkSummaries: string[] = [];
@@ -163,11 +165,13 @@ async function summarizeTranscript(
       chunkSummaries.push(chunkSummary);
     }
 
-    return await requestSummary(
+    const summary = await requestSummary(
       client,
       buildSummaryPrompt(chunkSummaries.join('\n'), targetLanguage, 'final'),
       maxTokens
     );
+    console.log(`[Translator] Summary generated:\n${summary}`);
+    return summary;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[Translator] Summary generation failed, proceeding without summary: ${message}`);

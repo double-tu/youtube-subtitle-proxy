@@ -159,6 +159,7 @@ export interface AppConfig {
     segmentGapMs: number;
     minDurationMs: number;
     maxDurationMs: number;
+    srv3OverlapGapMs: number;
   };
 
   admin: {

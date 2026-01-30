@@ -46,6 +46,7 @@ const envSchema = z.object({
   SEGMENT_GAP_MS: z.string().default('1200').transform(Number),
   SEGMENT_MIN_DURATION_MS: z.string().default('3000').transform(Number),
   SEGMENT_MAX_DURATION_MS: z.string().default('7000').transform(Number),
+  SRV3_OVERLAP_GAP_MS: z.string().default('100').transform(Number),
 
   // Admin (optional)
   ADMIN_TOKEN: z.string().optional(),
@@ -109,6 +110,7 @@ function loadEnv(): AppConfig {
       segmentGapMs: env.SEGMENT_GAP_MS,
       minDurationMs: env.SEGMENT_MIN_DURATION_MS,
       maxDurationMs: env.SEGMENT_MAX_DURATION_MS,
+      srv3OverlapGapMs: env.SRV3_OVERLAP_GAP_MS,
     },
 
     admin: {
