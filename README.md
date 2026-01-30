@@ -395,7 +395,7 @@ docker-compose exec youtube-subtitle-proxy sh
 ls -lh /app/data/subtitles.db
 
 # 查看缓存统计
-curl http://localhost:3000/health
+curl http://localhost:12033/health
 ```
 
 ---

@@ -253,7 +253,7 @@ setInterval(() => {
 ## 10) Deployment and Configuration
 
 ### Environment Variables
-- `PORT=3000`
+- `PORT=12033`
 - `OPENAI_API_KEY=...`
 - `OPENAI_MODEL=gpt-4o`
 - `DB_PATH=/data/subtitles.db`
@@ -276,7 +276,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 COPY . .
 ENV NODE_ENV=production
-EXPOSE 3000
+EXPOSE 12033
 CMD ["node", "dist/http/server.js"]
 ```
 

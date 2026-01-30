@@ -61,6 +61,8 @@ if [ -z "$OPENAI_API_KEY" ] || [ "$OPENAI_API_KEY" = "your-api-key-here" ]; then
     exit 1
 fi
 
+HOST_PORT=${HOST_PORT:-12033}
+
 echo "✅ 配置文件验证通过"
 echo ""
 
@@ -137,7 +139,7 @@ sleep 5
 # 检查服务状态
 echo ""
 echo "🔍 检查服务状态..."
-if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+if curl -s http://localhost:${HOST_PORT}/health > /dev/null 2>&1; then
     echo "✅ 服务运行正常！"
     echo ""
     echo "📡 服务信息:"
@@ -157,7 +159,7 @@ if curl -s http://localhost:3000/health > /dev/null 2>&1; then
 
     # 显示健康检查结果
     echo "🏥 健康检查结果:"
-    curl -s http://localhost:3000/health | jq '.' 2>/dev/null || curl -s http://localhost:3000/health
+    curl -s http://localhost:${HOST_PORT}/health | jq '.' 2>/dev/null || curl -s http://localhost:${HOST_PORT}/health
 else
     echo "⚠️  服务可能未正常启动，请检查日志:"
     echo "   docker-compose logs -f"
