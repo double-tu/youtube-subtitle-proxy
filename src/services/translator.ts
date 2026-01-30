@@ -42,26 +42,29 @@ function resolveTargetLanguage(targetLang: string): string {
 function buildTranslationPrompt(
   text: string,
   targetLanguage: string,
-  summary?: string
+  summary?: string,
+  glossary?: string
 ): string {
   const summarySection = summary
-    ? `\nContext summary (for reference only):\n${summary}\n`
+    ? `\nContext summary (original language, for reference only):\n${summary}\n`
+    : '';
+  const glossarySection = glossary
+    ? `\nGlossary (JSON, source -> ${targetLanguage}):\n${glossary}\n`
     : '';
 
-  return `Translate the following text to ${targetLanguage}. Use the context summary to keep terminology consistent if helpful, but do not include it in your output. Return only the translation without any explanation or additional text.${summarySection}
+  return `Translate the following text to ${targetLanguage}. Use the context summary and glossary to keep terminology consistent if helpful, but do not include them in your output. Return only the translation without any explanation or additional text.${summarySection}${glossarySection}
 Text: ${text}`;
 }
 
 function buildSummaryPrompt(
   text: string,
-  targetLanguage: string,
   mode: 'full' | 'chunk' | 'final'
 ): string {
   const instruction = mode === 'final'
-    ? `Combine the following chunk summaries into a concise overall summary in ${targetLanguage}.`
+    ? 'Combine the following chunk summaries into a concise overall summary in the same language as the input summaries. Do not translate.'
     : mode === 'chunk'
-      ? `Summarize this transcript chunk in ${targetLanguage}.`
-      : `Summarize the following transcript in ${targetLanguage}.`;
+      ? 'Summarize this transcript chunk in the same language as the input text. Do not translate.'
+      : 'Summarize the following transcript in the same language as the input text. Do not translate.';
 
   return `${instruction} Focus on tone/register, speaker relationships, key topics, names, and terminology. Keep it concise (3-6 bullet points). Return only the summary.
 
@@ -69,8 +72,30 @@ Text:
 ${text}`;
 }
 
+function buildGlossaryPrompt(
+  text: string,
+  targetLanguage: string,
+  mode: 'full' | 'chunk' | 'final'
+): string {
+  const instruction = mode === 'final'
+    ? `Combine and deduplicate the following partial glossaries into a single JSON array. Use ${targetLanguage} for translations. Return only JSON.`
+    : mode === 'chunk'
+      ? `Extract a glossary of key terms and entities from this transcript chunk. Translate each term into ${targetLanguage}. Return only JSON.`
+      : `Extract a glossary of key terms and entities from the following transcript. Translate each term into ${targetLanguage}. Return only JSON.`;
+
+  return `${instruction}
+
+Requirements:
+- Return a JSON array only. If no terms, return [].
+- Each item: {"source": "<original term>", "target": "<${targetLanguage} translation>", "note": "<optional context>"}.
+- Keep source text exactly as it appears.
+
+Text:
+${text}`;
+}
+
 type ContextBatch = {
-  preceding: Array<{ index: number; original: string; translation: string | null }>;
+  preceding: Array<{ index: number; text: string }>;
   current: Array<{ index: number; text: string }>;
   following: Array<{ index: number; text: string }>;
 };
@@ -78,21 +103,25 @@ type ContextBatch = {
 function buildContextualTranslationPrompt(
   batch: ContextBatch,
   targetLanguage: string,
-  summary?: string
+  summary?: string,
+  glossary?: string
 ): string {
   const summarySection = summary
-    ? `\n## Context Guide\n${summary}\n`
-    : '\n## Context Guide\n(None)\n';
+    ? `\n## Summary (Original Language)\n${summary}\n`
+    : '\n## Summary (Original Language)\n(None)\n';
+  const glossarySection = glossary
+    ? `\n## Glossary (JSON)\n${glossary}\n`
+    : '\n## Glossary (JSON)\n(None)\n';
 
   return `You are a senior subtitle translator. You must preserve meaning and tone while producing natural, fluent ${targetLanguage} subtitles.
 
 # Task
-Translate the Current Subtitle Batch into ${targetLanguage}. Use the Context Guide and Context Stream to keep names, tone, and references consistent.
+Translate the Current Subtitle Batch into ${targetLanguage}. Use the Summary, Glossary, and Context Stream to keep names, tone, and references consistent.
 
-${summarySection}
+${summarySection}${glossarySection}
 ## Context Stream
-- Preceding Context (Translated):
-${formatContextLines(batch.preceding)}
+- Preceding Context (Original):
+${formatBatchLines(batch.preceding)}
 
 - Following Context (Preview):
 ${formatBatchLines(batch.following)}
@@ -103,21 +132,13 @@ ${formatBatchLines(batch.current)}
 # Translation Rules
 1. Semantic fusion: join fragmented lines into complete sentences in your head, then split back to the original line IDs.
 2. Use context to resolve pronouns and implied subjects.
-3. Keep translation length close to the original to avoid readability issues.
+3. Use the Glossary to keep proper nouns and key terms consistent.
+4. Keep translation length close to the original to avoid readability issues.
 
 # Output Requirements
 Return only a JSON array with exactly ${batch.current.length} items.
 Each item must be: {"id": <number>, "translation": "<text>"}
 IDs must match the bracketed indices in Current Subtitle Batch.`;
-}
-
-function formatContextLines(lines: Array<{ index: number; original: string; translation: string | null }>): string {
-  if (lines.length === 0) {
-    return '(none)';
-  }
-  return lines
-    .map(line => `[${line.index}] ${line.original}\n    -> ${line.translation ?? '(untranslated)'}`)
-    .join('\n');
 }
 
 function formatBatchLines(lines: Array<{ index: number; text: string }>): string {
@@ -245,53 +266,59 @@ async function requestSummary(
   return summary;
 }
 
-async function summarizeTranscript(
-  cues: SubtitleCue[],
-  targetLang: string
-): Promise<string | null> {
+async function requestGlossary(
+  client: OpenAI,
+  prompt: string,
+  maxTokens: number
+): Promise<string> {
   const config = getConfig();
-  if (!config.translationSummary.enabled) {
-    return null;
+  const response = await client.chat.completions.create({
+    model: config.openai.model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.2,
+    max_tokens: maxTokens,
+  });
+
+  const glossary = response.choices[0]?.message?.content?.trim();
+  if (!glossary) {
+    throw new Error('Empty glossary response from OpenAI');
   }
 
-  const transcriptText = buildTranscriptText(cues);
-  if (!transcriptText) {
-    return null;
-  }
+  return glossary;
+}
 
-  const client = getOpenAIClient();
-  const targetLanguage = resolveTargetLanguage(targetLang);
-  const maxTokens = config.translationSummary.maxTokens;
-  const chunks = splitTranscriptText(transcriptText, config.translationSummary.chunkChars);
+async function summarizeTranscriptText(
+  client: OpenAI,
+  transcriptText: string,
+  maxTokens: number,
+  chunkChars: number
+): Promise<string | null> {
+  const chunks = splitTranscriptText(transcriptText, chunkChars);
 
   try {
     if (chunks.length === 1) {
-      const summary = await requestSummary(
+      return await requestSummary(
         client,
-        buildSummaryPrompt(chunks[0], targetLanguage, 'full'),
+        buildSummaryPrompt(chunks[0], 'full'),
         maxTokens
       );
-      console.log(`[Translator] Summary generated:\n${summary}`);
-      return summary;
     }
 
     const chunkSummaries: string[] = [];
     for (let i = 0; i < chunks.length; i++) {
       const chunkSummary = await requestSummary(
         client,
-        buildSummaryPrompt(chunks[i], targetLanguage, 'chunk'),
+        buildSummaryPrompt(chunks[i], 'chunk'),
         maxTokens
       );
       chunkSummaries.push(chunkSummary);
     }
 
-    const summary = await requestSummary(
+    return await requestSummary(
       client,
-      buildSummaryPrompt(chunkSummaries.join('\n'), targetLanguage, 'final'),
+      buildSummaryPrompt(chunkSummaries.join('\n'), 'final'),
       maxTokens
     );
-    console.log(`[Translator] Summary generated:\n${summary}`);
-    return summary;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[Translator] Summary generation failed, proceeding without summary: ${message}`);
@@ -299,9 +326,104 @@ async function summarizeTranscript(
   }
 }
 
+async function extractGlossaryText(
+  client: OpenAI,
+  transcriptText: string,
+  targetLanguage: string,
+  maxTokens: number,
+  chunkChars: number
+): Promise<string | null> {
+  const chunks = splitTranscriptText(transcriptText, chunkChars);
+
+  try {
+    if (chunks.length === 1) {
+      return await requestGlossary(
+        client,
+        buildGlossaryPrompt(chunks[0], targetLanguage, 'full'),
+        maxTokens
+      );
+    }
+
+    const chunkGlossaries: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkGlossary = await requestGlossary(
+        client,
+        buildGlossaryPrompt(chunks[i], targetLanguage, 'chunk'),
+        maxTokens
+      );
+      chunkGlossaries.push(chunkGlossary);
+    }
+
+    return await requestGlossary(
+      client,
+      buildGlossaryPrompt(chunkGlossaries.join('\n'), targetLanguage, 'final'),
+      maxTokens
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Translator] Glossary extraction failed, proceeding without glossary: ${message}`);
+    return null;
+  }
+}
+
+type TranslationGuidance = {
+  summary: string | null;
+  glossary: string | null;
+};
+
+async function buildTranslationGuidance(
+  cues: SubtitleCue[],
+  targetLang: string
+): Promise<TranslationGuidance> {
+  const config = getConfig();
+  const summaryEnabled = config.translationSummary.enabled;
+  const glossaryEnabled = config.translationGlossary.enabled;
+
+  if (!summaryEnabled && !glossaryEnabled) {
+    return { summary: null, glossary: null };
+  }
+
+  const transcriptText = buildTranscriptText(cues);
+  if (!transcriptText) {
+    return { summary: null, glossary: null };
+  }
+
+  const client = getOpenAIClient();
+  const targetLanguage = resolveTargetLanguage(targetLang);
+
+  const summaryPromise = summaryEnabled
+    ? summarizeTranscriptText(
+        client,
+        transcriptText,
+        config.translationSummary.maxTokens,
+        config.translationSummary.chunkChars
+      )
+    : Promise.resolve(null);
+
+  const glossaryPromise = glossaryEnabled
+    ? extractGlossaryText(
+        client,
+        transcriptText,
+        targetLanguage,
+        config.translationGlossary.maxTokens,
+        config.translationGlossary.chunkChars
+      )
+    : Promise.resolve(null);
+
+  const [summary, glossary] = await Promise.all([summaryPromise, glossaryPromise]);
+
+  if (summary) {
+    console.log(`[Translator] Summary generated:\n${summary}`);
+  }
+  if (glossary) {
+    console.log(`[Translator] Glossary generated (${glossary.length} chars)`);
+  }
+
+  return { summary, glossary };
+}
+
 function buildContextBatch(
   cues: SubtitleCue[],
-  translations: Array<string | null>,
   startIndex: number,
   endIndex: number,
   precedingLines: number,
@@ -310,8 +432,7 @@ function buildContextBatch(
   const precedingStart = Math.max(0, startIndex - precedingLines);
   const preceding = cues.slice(precedingStart, startIndex).map((cue, offset) => ({
     index: precedingStart + offset,
-    original: cue.text,
-    translation: translations[precedingStart + offset] ?? null,
+    text: cue.text,
   }));
 
   const current = cues.slice(startIndex, endIndex).map((cue, offset) => ({
@@ -333,9 +454,9 @@ export async function translateBatchWithContext(
   targetLang: string = 'zh-CN'
 ): Promise<SubtitleCue[]> {
   const config = getConfig();
-  const client = getOpenAIClient();
   const targetLanguage = resolveTargetLanguage(targetLang);
-  const summary = await summarizeTranscript(cues, targetLang);
+  const client = getOpenAIClient();
+  const { summary, glossary } = await buildTranslationGuidance(cues, targetLang);
 
   const batchSize = Math.max(1, config.translationContext.batchSize);
   const precedingLines = Math.max(0, config.translationContext.precedingContextLines);
@@ -362,14 +483,18 @@ export async function translateBatchWithContext(
 
       const batch = buildContextBatch(
         cues,
-        translatedTexts,
         start,
         end,
         precedingLines,
         followingLines
       );
 
-      const prompt = buildContextualTranslationPrompt(batch, targetLanguage, summary || undefined);
+      const prompt = buildContextualTranslationPrompt(
+        batch,
+        targetLanguage,
+        summary || undefined,
+        glossary || undefined
+      );
 
       const response = await client.chat.completions.create({
         model: config.openai.model,
@@ -427,13 +552,14 @@ export async function translateBatchWithContext(
 export async function translateText(
   text: string,
   targetLang: string = 'zh-CN',
-  summary?: string
+  summary?: string,
+  glossary?: string
 ): Promise<string> {
   const client = getOpenAIClient();
   const config = getConfig();
 
   const targetLanguage = resolveTargetLanguage(targetLang);
-  const prompt = buildTranslationPrompt(text, targetLanguage, summary);
+  const prompt = buildTranslationPrompt(text, targetLanguage, summary, glossary);
 
   try {
     const response = await client.chat.completions.create({
@@ -469,10 +595,13 @@ export async function translateBatch(
   const results: SubtitleCue[] = [];
   const config = getConfig();
   const actualConcurrency = Math.min(concurrency, config.queue.concurrency);
-  const summary = await summarizeTranscript(cues, targetLang);
+  const { summary, glossary } = await buildTranslationGuidance(cues, targetLang);
 
   if (summary) {
     console.log(`[Translator] Using summary context (${summary.length} chars)`);
+  }
+  if (glossary) {
+    console.log(`[Translator] Using glossary context (${glossary.length} chars)`);
   }
 
   console.log(`[Translator] Starting translation: ${cues.length} segments, concurrency=${actualConcurrency}`);
@@ -482,7 +611,12 @@ export async function translateBatch(
 
     const promises = batch.map(async (cue) => {
       try {
-        const translation = await translateText(cue.text, targetLang, summary || undefined);
+        const translation = await translateText(
+          cue.text,
+          targetLang,
+          summary || undefined,
+          glossary || undefined
+        );
         return {
           ...cue,
           text: translation,

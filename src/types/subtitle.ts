@@ -134,6 +134,12 @@ export interface AppConfig {
     chunkChars: number;
   };
 
+  translationGlossary: {
+    enabled: boolean;
+    maxTokens: number;
+    chunkChars: number;
+  };
+
   translationContext: {
     enabled: boolean;
     batchSize: number;

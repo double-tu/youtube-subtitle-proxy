@@ -82,6 +82,7 @@ describe('translator context batching', () => {
       TRANSLATION_CONTEXT_PRECEDING_LINES: '1',
       TRANSLATION_CONTEXT_FOLLOWING_LINES: '1',
       TRANSLATION_SUMMARY_ENABLED: 'false',
+      TRANSLATION_GLOSSARY_ENABLED: 'false',
     });
 
     const cues = [
@@ -101,8 +102,8 @@ describe('translator context batching', () => {
     expect(mockCreate).toHaveBeenCalledTimes(2);
 
     const secondPrompt = mockCreate.mock.calls[1][0].messages[0].content as string;
-    expect(secondPrompt).toContain('Preceding Context (Translated)');
-    expect(secondPrompt).toContain('-> T1');
+    expect(secondPrompt).toContain('Preceding Context (Original)');
+    expect(secondPrompt).toContain('[1] This is a test.');
     expect(secondPrompt).toContain('[2] Final line.');
   });
 });

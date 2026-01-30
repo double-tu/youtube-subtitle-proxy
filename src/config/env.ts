@@ -25,6 +25,9 @@ const envSchema = z.object({
   TRANSLATION_SUMMARY_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   TRANSLATION_SUMMARY_MAX_TOKENS: z.string().default('200').transform(Number),
   TRANSLATION_SUMMARY_CHUNK_CHARS: z.string().default('12000').transform(Number),
+  TRANSLATION_GLOSSARY_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  TRANSLATION_GLOSSARY_MAX_TOKENS: z.string().default('200').transform(Number),
+  TRANSLATION_GLOSSARY_CHUNK_CHARS: z.string().default('12000').transform(Number),
   TRANSLATION_CONTEXT_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   TRANSLATION_CONTEXT_BATCH_SIZE: z.string().default('8').transform(Number),
   TRANSLATION_CONTEXT_PRECEDING_LINES: z.string().default('4').transform(Number),
@@ -90,6 +93,11 @@ function loadEnv(): AppConfig {
       enabled: env.TRANSLATION_SUMMARY_ENABLED,
       maxTokens: env.TRANSLATION_SUMMARY_MAX_TOKENS,
       chunkChars: env.TRANSLATION_SUMMARY_CHUNK_CHARS,
+    },
+    translationGlossary: {
+      enabled: env.TRANSLATION_GLOSSARY_ENABLED,
+      maxTokens: env.TRANSLATION_GLOSSARY_MAX_TOKENS,
+      chunkChars: env.TRANSLATION_GLOSSARY_CHUNK_CHARS,
     },
 
     translationContext: {
