@@ -27,8 +27,8 @@ echo "✅ Docker 环境检查通过"
 echo ""
 
 # 检查配置文件
-if [ ! -f .env.production ]; then
-    echo "📝 未找到 .env.production 配置文件"
+if [ ! -f .env ]; then
+    echo "📝 未找到 .env 配置文件"
     echo "正在从模板创建..."
 
     if [ ! -f .env.production.example ]; then
@@ -36,10 +36,10 @@ if [ ! -f .env.production ]; then
         exit 1
     fi
 
-    cp .env.production.example .env.production
-    echo "✅ 配置文件已创建: .env.production"
+    cp .env.production.example .env
+    echo "✅ 配置文件已创建: .env"
     echo ""
-    echo "⚠️  请编辑 .env.production 文件，配置以下必需项:"
+    echo "⚠️  请编辑 .env 文件，配置以下必需项:"
     echo "   1. OPENAI_API_KEY=your-api-key"
     echo "   2. OPENAI_BASE_URL=your-api-endpoint (可选)"
     echo "   3. OPENAI_MODEL=your-model (可选)"
@@ -47,17 +47,17 @@ if [ ! -f .env.production ]; then
     read -p "是否现在编辑配置文件? (y/n) " -n 1 -r
     echo ""
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        ${EDITOR:-nano} .env.production
+        ${EDITOR:-nano} .env
     else
-        echo "请手动编辑 .env.production 后再次运行本脚本"
+        echo "请手动编辑 .env 后再次运行本脚本"
         exit 0
     fi
 fi
 
 # 验证必需配置
-source .env.production
+source .env
 if [ -z "$OPENAI_API_KEY" ] || [ "$OPENAI_API_KEY" = "your-api-key-here" ]; then
-    echo "❌ OPENAI_API_KEY 未配置，请编辑 .env.production"
+    echo "❌ OPENAI_API_KEY 未配置，请编辑 .env"
     exit 1
 fi
 

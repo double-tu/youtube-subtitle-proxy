@@ -39,10 +39,10 @@ cd youtube-subtitle-proxy
 
 ```bash
 # 复制配置模板
-cp .env.production.example .env.production
+cp .env.production.example .env
 
 # 编辑配置（必需）
-nano .env.production
+nano .env
 ```
 
 **必需配置项**:
@@ -261,7 +261,7 @@ curl http://localhost:12033/health
 docker-compose logs -f | grep Translation
 
 # 检查配置
-cat .env.production | grep OPENAI
+cat .env | grep OPENAI
 
 # 测试 API 连接
 curl -X POST https://ai.tt9.top/v1/chat/completions \
@@ -365,7 +365,7 @@ docker-compose up -d
 
 3. **配置信息**（隐藏敏感数据）:
    ```bash
-   cat .env.production | grep -v API_KEY
+   cat .env | grep -v API_KEY
    ```
 
 ---

@@ -17,17 +17,16 @@ COPY src ./src
 # Build TypeScript
 RUN npm run build
 
+# Remove dev dependencies after build
+RUN npm prune --omit=dev
+
 # Stage 2: Production
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Install production dependencies only
-COPY package*.json ./
-RUN npm ci --production --ignore-scripts && \
-    npm cache clean --force
-
-# Copy built files from builder
+# Copy production dependencies and built files from builder
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
 # Create data directory for SQLite

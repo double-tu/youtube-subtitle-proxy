@@ -27,10 +27,10 @@ cd youtube-subtitle-proxy
 
 ```bash
 # 创建配置文件
-cp .env.production.example .env.production
+cp .env.production.example .env
 
 # 编辑配置文件（必须配置 OPENAI_API_KEY）
-nano .env.production
+nano .env
 ```
 
 **3. 一键启动**
@@ -156,7 +156,7 @@ OPENAI_MODEL=llama3-chinese
 ### 完整配置示例
 
 ```bash
-# .env.production
+# .env
 
 # 必需配置
 OPENAI_API_KEY=sk-qq0gz1lTiLXvawGSMhImDbBY4I4Esuae6xuoCrBXGHvouCfi
@@ -362,7 +362,7 @@ sudo lsof -i :12033
 docker-compose logs -f
 
 # 检查配置文件
-cat .env.production
+cat .env
 ```
 
 ### 2. 翻译失败
@@ -428,7 +428,7 @@ youtube-subtitle-proxy/
 │   └── openai-endpoint-config.md      # OpenAI 端点配置
 ├── Dockerfile                  # Docker 镜像
 ├── docker-compose.yml          # Docker Compose 配置
-├── .env.production.example     # 生产环境配置模板
+├── .env.production.example     # 生产环境配置模板（复制为 .env）
 └── README.md                   # 本文档
 ```
 
@@ -437,7 +437,7 @@ youtube-subtitle-proxy/
 ## 🔐 安全建议
 
 1. **API 密钥保护**:
-   - 不要将 `.env.production` 提交到 Git
+- 不要将 `.env` 提交到 Git
    - 使用环境变量或密钥管理服务
 
 2. **管理接口保护**:
