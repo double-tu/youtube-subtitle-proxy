@@ -3,8 +3,12 @@
  *
  * Loads and validates environment variables
  */
+import { config as dotenvConfig } from 'dotenv';
 import { z } from 'zod';
 import type { AppConfig } from '../types/subtitle.js';
+
+// Load .env file
+dotenvConfig();
 
 // Zod schema for environment validation
 const envSchema = z.object({

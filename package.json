@@ -26,6 +26,7 @@
   "dependencies": {
     "@hono/node-server": "^1.19.9",
     "better-sqlite3": "^9.4.0",
+    "dotenv": "^17.2.3",
     "hono": "^4.0.0",
     "lru-cache": "^10.2.0",
     "openai": "^4.28.0",
