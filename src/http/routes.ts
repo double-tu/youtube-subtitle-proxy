@@ -1,7 +1,7 @@
 /**
  * HTTP Routes
  */
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { getDatabase, getCacheStats } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
 import { fetchYouTubeSubtitle, generateCacheKey, generateSourceHash } from '../services/youtube.js';
@@ -68,17 +68,53 @@ app.get('/health', (c) => {
 // Subtitle Proxy Endpoint
 // ========================================
 
-app.get('/api/subtitle', async (c) => {
+const buildOriginalTimedtextUrl = (c: Context): string => {
+  const requestUrl = new URL(c.req.url);
+  const baseUrl = new URL('https://www.youtube.com/api/timedtext');
+  baseUrl.search = requestUrl.search;
+  return baseUrl.toString();
+};
+
+const handleSubtitleRequest = async (c: Context, useOriginalUrl: boolean = false) => {
   try {
     // Parse query parameters
     const query = c.req.query();
+    const signedRequestKeys = [
+      'signature',
+      'sparams',
+      'pot',
+      'potc',
+      'ei',
+      'exp',
+      'xoaf',
+      'xowf',
+      'xorb',
+      'xobt',
+      'xovt',
+      'key',
+      'ip',
+      'ipbits',
+      'expire',
+      'caps',
+      'opi',
+      'c',
+      'cver',
+      'cplayer',
+      'cos',
+      'cosver',
+      'cplatform',
+    ];
+    const shouldPreserveOriginalQuery = useOriginalUrl
+      || signedRequestKeys.some((key) => Object.prototype.hasOwnProperty.call(query, key));
+    const originalUrl = query.original_url
+      || (shouldPreserveOriginalQuery ? buildOriginalTimedtextUrl(c) : undefined);
     const params: SubtitleRequest = {
       v: query.v || '',
       lang: query.lang || '',
       tlang: query.tlang || 'zh-CN',
       kind: query.kind || 'asr',
       fmt: query.fmt || 'json3',
-      original_url: query.original_url,
+      original_url: originalUrl || query.original_url,
     };
 
     // Validate required parameters
@@ -174,7 +210,10 @@ app.get('/api/subtitle', async (c) => {
 
     return c.json(errorResponse, 500);
   }
-});
+};
+
+app.get('/api/subtitle', (c) => handleSubtitleRequest(c));
+app.get('/api/timedtext', (c) => handleSubtitleRequest(c, true));
 
 // ========================================
 // Cache Statistics (Admin only)
