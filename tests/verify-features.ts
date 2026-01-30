@@ -3,7 +3,7 @@
  */
 import { parseYouTubeTimedText, validateCues } from '../src/subtitle/parse.js';
 import { mergeSubtitleCues } from '../src/subtitle/segment.js';
-import { renderWebVTT, createBilingualCue } from '../src/subtitle/render.js';
+import { renderWebVTT, renderYouTubeSrv3, createBilingualCue } from '../src/subtitle/render.js';
 import { generateCacheKey, generateSourceHash } from '../src/services/youtube.js';
 
 console.log('🧪 Testing YouTube Subtitle Proxy Features\n');
@@ -60,6 +60,11 @@ console.log(`  Translation: "${bilingualCue.text.split('\\n')[1]}"`);
 const webvtt = renderWebVTT([bilingualCue], { language: 'zh-CN' });
 console.log(`  WebVTT length: ${webvtt.length} bytes`);
 console.log(`  Preview:\n${webvtt.split('\\n').slice(0, 12).join('\\n')}\n`);
+
+const srv3 = renderYouTubeSrv3([bilingualCue]);
+const srv3HasSpans = srv3.includes('<s t="0">') && srv3.includes('&#x0A;');
+console.log(`  SRV3 uses <s> spans: ${srv3HasSpans ? 'PASS' : 'FAIL'}`);
+console.log(`  SRV3 preview:\n${srv3.split('\\n').slice(0, 14).join('\\n')}\n`);
 
 // Test 4: Cache Key Generation
 console.log('✅ Test 4: Cache Key Generation');

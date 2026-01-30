@@ -128,6 +128,12 @@ export interface AppConfig {
     timeout: number;
   };
 
+  translationSummary: {
+    enabled: boolean;
+    maxTokens: number;
+    chunkChars: number;
+  };
+
   database: {
     path: string;
     verbose: boolean;

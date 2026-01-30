@@ -79,8 +79,22 @@ export function renderYouTubeSrv3(cues: SubtitleCue[]): string {
   for (const cue of cues) {
     const start = Math.floor(cue.startTime);
     const duration = Math.max(0, Math.floor(cue.endTime - cue.startTime));
-    const text = escapeXml(cue.text).replace(/\n/g, '<br/>');
-    xml += `    <p t="${start}" d="${duration}" w="1">${text}</p>\n`;
+    const lines = cue.text.split(/\r?\n/);
+    const primaryLine = lines[0] ?? '';
+    const secondaryLine = lines.slice(1).join(' ').trim();
+    const segments: string[] = [];
+
+    if (primaryLine.trim()) {
+      segments.push(`      <s t="0">${escapeXml(primaryLine)}</s>`);
+    }
+
+    if (secondaryLine) {
+      segments.push('      <s t="0">&#x0A;</s>');
+      segments.push(`      <s t="0">${escapeXml(secondaryLine)}</s>`);
+    }
+
+    const segmentXml = segments.join('\n');
+    xml += `    <p t="${start}" d="${duration}" w="1">\n${segmentXml}\n    </p>\n`;
   }
 
   xml += '  </body>\n';

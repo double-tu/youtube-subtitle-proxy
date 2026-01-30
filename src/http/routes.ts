@@ -5,8 +5,13 @@ import { Hono, type Context } from 'hono';
 import { getDatabase, getCacheStats } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
 import { fetchYouTubeTimedText, generateCacheKey, generateSourceHash } from '../services/youtube.js';
-import { getBilingualSubtitle } from '../services/cache.js';
-import { enqueueTranslation, getQueueStatus } from '../queue/queue.js';
+import { getBilingualSubtitle, getCaptionJobByKey } from '../services/cache.js';
+import {
+  buildTranslationTaskKey,
+  enqueueTranslation,
+  getQueueStatus,
+  isTranslationInFlight,
+} from '../queue/queue.js';
 import { parseWebVTT } from '../subtitle/parse.js';
 import { renderYouTubeSrv3, renderYouTubeTimedText } from '../subtitle/render.js';
 import type { SubtitleRequest, ErrorResponse, HealthCheckResponse } from '../types/subtitle.js';
@@ -169,11 +174,26 @@ const handleSubtitleRequest = async (c: Context) => {
 
     // Generate source hash
     const sourceHash = generateSourceHash(JSON.stringify(originalResult.parsed));
+    const taskKey = buildTranslationTaskKey(params, sourceHash);
 
-    // Enqueue translation task (async, non-blocking)
-    enqueueTranslation(params, originalResult.parsed, sourceHash).catch(error => {
-      console.error(`[API] Failed to enqueue translation:`, error);
+    const existingJob = await getCaptionJobByKey({
+      videoId: params.v,
+      lang: params.lang,
+      track: params.kind || 'asr',
+      fmt: params.fmt || 'json3',
+      sourceHash,
     });
+
+    if (existingJob && (existingJob.status === 'pending' || existingJob.status === 'translating')) {
+      console.log(`[Queue] Skip enqueue; existing job in progress: ${existingJob.id}`);
+    } else if (isTranslationInFlight(taskKey)) {
+      console.log(`[Queue] Skip enqueue; task already in flight: ${taskKey}`);
+    } else {
+      // Enqueue translation task (async, non-blocking)
+      enqueueTranslation(params, originalResult.parsed, sourceHash).catch(error => {
+        console.error(`[API] Failed to enqueue translation:`, error);
+      });
+    }
 
     // Return original subtitle immediately (keep original format)
     const responseContent = originalResult.rawText;

@@ -165,6 +165,35 @@ export async function getCaptionJob(jobId: string): Promise<CaptionJob | null> {
 }
 
 /**
+ * Get latest caption job by cache key and source hash
+ */
+export async function getCaptionJobByKey(params: {
+  videoId: string;
+  lang: string;
+  track: string;
+  fmt: string;
+  sourceHash: string;
+}): Promise<Pick<CaptionJob, 'id' | 'status' | 'updated_at'> | null> {
+  const db = getDatabase();
+
+  const row = db.prepare(`
+    SELECT id, status, updated_at
+    FROM caption_jobs
+    WHERE video_id = ? AND lang = ? AND track = ? AND fmt = ? AND source_hash = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(
+    params.videoId,
+    params.lang,
+    params.track,
+    params.fmt,
+    params.sourceHash
+  ) as { id: string; status: JobStatus; updated_at: number } | undefined;
+
+  return row || null;
+}
+
+/**
  * Get pending jobs for retry
  */
 export async function getPendingJobs(limit: number = 10): Promise<CaptionJob[]> {
@@ -225,6 +254,7 @@ export default {
   createCaptionJob,
   updateCaptionJobStatus,
   getCaptionJob,
+  getCaptionJobByKey,
   getPendingJobs,
   incrementJobRetry,
   clearAllCaches,

@@ -22,6 +22,9 @@ const envSchema = z.object({
   OPENAI_MODEL: z.string().default('gpt-4o'),
   TRANSLATE_TIMEOUT_MS: z.string().default('20000').transform(Number),
   QUEUE_CONCURRENCY: z.string().default('2').transform(Number),
+  TRANSLATION_SUMMARY_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  TRANSLATION_SUMMARY_MAX_TOKENS: z.string().default('200').transform(Number),
+  TRANSLATION_SUMMARY_CHUNK_CHARS: z.string().default('12000').transform(Number),
 
   // Database
   DB_PATH: z.string().default('./data/subtitles.db'),
@@ -73,6 +76,12 @@ function loadEnv(): AppConfig {
       baseUrl: env.OPENAI_BASE_URL,
       model: env.OPENAI_MODEL,
       timeout: env.TRANSLATE_TIMEOUT_MS,
+    },
+
+    translationSummary: {
+      enabled: env.TRANSLATION_SUMMARY_ENABLED,
+      maxTokens: env.TRANSLATION_SUMMARY_MAX_TOKENS,
+      chunkChars: env.TRANSLATION_SUMMARY_CHUNK_CHARS,
     },
 
     database: {

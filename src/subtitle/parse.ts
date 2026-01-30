@@ -100,6 +100,7 @@ function decodeXmlEntities(text: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
+    .replace(/&#x0a;/gi, '\n')
     .replace(/&#10;/g, '\n')
     .replace(/&#13;/g, '')
     .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));

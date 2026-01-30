@@ -9,6 +9,17 @@ import { getConfig } from '../config/env.js';
 
 let openaiClient: OpenAI | null = null;
 
+const languageNames: Record<string, string> = {
+  'zh-CN': 'Simplified Chinese',
+  'zh-TW': 'Traditional Chinese',
+  'ja': 'Japanese',
+  'ko': 'Korean',
+  'es': 'Spanish',
+  'fr': 'French',
+  'de': 'German',
+  'ru': 'Russian',
+};
+
 /**
  * Get OpenAI client instance
  */
@@ -24,32 +35,159 @@ function getOpenAIClient(): OpenAI {
   return openaiClient;
 }
 
+function resolveTargetLanguage(targetLang: string): string {
+  return languageNames[targetLang] || targetLang;
+}
+
+function buildTranslationPrompt(
+  text: string,
+  targetLanguage: string,
+  summary?: string
+): string {
+  const summarySection = summary
+    ? `\nContext summary (for reference only):\n${summary}\n`
+    : '';
+
+  return `Translate the following text to ${targetLanguage}. Use the context summary to keep terminology consistent if helpful, but do not include it in your output. Return only the translation without any explanation or additional text.${summarySection}
+Text: ${text}`;
+}
+
+function buildSummaryPrompt(
+  text: string,
+  targetLanguage: string,
+  mode: 'full' | 'chunk' | 'final'
+): string {
+  const instruction = mode === 'final'
+    ? `Combine the following chunk summaries into a concise overall summary in ${targetLanguage}.`
+    : mode === 'chunk'
+      ? `Summarize this transcript chunk in ${targetLanguage}.`
+      : `Summarize the following transcript in ${targetLanguage}.`;
+
+  return `${instruction} Focus on key topics, names, and terminology. Keep it concise (3-6 bullet points). Return only the summary.
+
+Text:
+${text}`;
+}
+
+function buildTranscriptText(cues: SubtitleCue[]): string {
+  return cues
+    .map(cue => cue.text.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+function splitTranscriptText(text: string, maxChunkChars: number): string[] {
+  if (text.length <= maxChunkChars) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = Math.min(start + maxChunkChars, text.length);
+    if (end < text.length) {
+      const lastBreak = text.lastIndexOf('\n', end);
+      if (lastBreak > start + Math.floor(maxChunkChars * 0.5)) {
+        end = lastBreak;
+      }
+    }
+
+    const chunk = text.slice(start, end).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    start = end;
+  }
+
+  return chunks;
+}
+
+async function requestSummary(
+  client: OpenAI,
+  prompt: string,
+  maxTokens: number
+): Promise<string> {
+  const config = getConfig();
+  const response = await client.chat.completions.create({
+    model: config.openai.model,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.2,
+    max_tokens: maxTokens,
+  });
+
+  const summary = response.choices[0]?.message?.content?.trim();
+  if (!summary) {
+    throw new Error('Empty summary response from OpenAI');
+  }
+
+  return summary;
+}
+
+async function summarizeTranscript(
+  cues: SubtitleCue[],
+  targetLang: string
+): Promise<string | null> {
+  const config = getConfig();
+  if (!config.translationSummary.enabled) {
+    return null;
+  }
+
+  const transcriptText = buildTranscriptText(cues);
+  if (!transcriptText) {
+    return null;
+  }
+
+  const client = getOpenAIClient();
+  const targetLanguage = resolveTargetLanguage(targetLang);
+  const maxTokens = config.translationSummary.maxTokens;
+  const chunks = splitTranscriptText(transcriptText, config.translationSummary.chunkChars);
+
+  try {
+    if (chunks.length === 1) {
+      return await requestSummary(
+        client,
+        buildSummaryPrompt(chunks[0], targetLanguage, 'full'),
+        maxTokens
+      );
+    }
+
+    const chunkSummaries: string[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkSummary = await requestSummary(
+        client,
+        buildSummaryPrompt(chunks[i], targetLanguage, 'chunk'),
+        maxTokens
+      );
+      chunkSummaries.push(chunkSummary);
+    }
+
+    return await requestSummary(
+      client,
+      buildSummaryPrompt(chunkSummaries.join('\n'), targetLanguage, 'final'),
+      maxTokens
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[Translator] Summary generation failed, proceeding without summary: ${message}`);
+    return null;
+  }
+}
+
 /**
  * Translate a single text segment
  */
 export async function translateText(
   text: string,
-  targetLang: string = 'zh-CN'
+  targetLang: string = 'zh-CN',
+  summary?: string
 ): Promise<string> {
   const client = getOpenAIClient();
   const config = getConfig();
 
-  const languageNames: Record<string, string> = {
-    'zh-CN': 'Simplified Chinese',
-    'zh-TW': 'Traditional Chinese',
-    'ja': 'Japanese',
-    'ko': 'Korean',
-    'es': 'Spanish',
-    'fr': 'French',
-    'de': 'German',
-    'ru': 'Russian',
-  };
-
-  const targetLanguage = languageNames[targetLang] || targetLang;
-
-  const prompt = `Translate the following text to ${targetLanguage}. Return only the translation without any explanation or additional text.
-
-Text: ${text}`;
+  const targetLanguage = resolveTargetLanguage(targetLang);
+  const prompt = buildTranslationPrompt(text, targetLanguage, summary);
 
   try {
     const response = await client.chat.completions.create({
@@ -85,6 +223,11 @@ export async function translateBatch(
   const results: SubtitleCue[] = [];
   const config = getConfig();
   const actualConcurrency = Math.min(concurrency, config.queue.concurrency);
+  const summary = await summarizeTranscript(cues, targetLang);
+
+  if (summary) {
+    console.log(`[Translator] Using summary context (${summary.length} chars)`);
+  }
 
   console.log(`[Translator] Starting translation: ${cues.length} segments, concurrency=${actualConcurrency}`);
 
@@ -93,7 +236,7 @@ export async function translateBatch(
 
     const promises = batch.map(async (cue) => {
       try {
-        const translation = await translateText(cue.text, targetLang);
+        const translation = await translateText(cue.text, targetLang, summary || undefined);
         return {
           ...cue,
           text: translation,

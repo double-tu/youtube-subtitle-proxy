@@ -145,6 +145,14 @@ OPENAI_MODEL=llama3-chinese
 | `LRU_MAX_ITEMS` | 1000 | 内存缓存最大条目数 |
 | `TRANSLATE_TIMEOUT_MS` | 20000 | 翻译超时时间（毫秒） |
 
+### 翻译上下文配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `TRANSLATION_SUMMARY_ENABLED` | true | 是否先生成全局摘要来提升翻译上下文 |
+| `TRANSLATION_SUMMARY_MAX_TOKENS` | 200 | 摘要最大输出 tokens |
+| `TRANSLATION_SUMMARY_CHUNK_CHARS` | 12000 | 单次摘要输入最大字符数（超出会分块） |
+
 ### 字幕分段配置
 
 | 配置项 | 默认值 | 说明 |
@@ -167,6 +175,9 @@ OPENAI_MODEL=deepseek-v3.2
 QUEUE_CONCURRENCY=16          # 16并发适合生产环境
 CACHE_TTL_HOURS=720          # 30天缓存
 TRANSLATE_TIMEOUT_MS=20000   # 20秒超时
+TRANSLATION_SUMMARY_ENABLED=true
+TRANSLATION_SUMMARY_MAX_TOKENS=200
+TRANSLATION_SUMMARY_CHUNK_CHARS=12000
 
 # 数据库配置
 DB_PATH=./data/subtitles.db

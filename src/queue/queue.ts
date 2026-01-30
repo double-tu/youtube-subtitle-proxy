@@ -25,12 +25,22 @@ interface TranslationTask {
   originalJson: YouTubeTimedTextResponse;
   sourceHash: string;
   createdAt: number;
+  taskKey: string;
 }
 
 // Task queue
 const taskQueue: TranslationTask[] = [];
+const inFlightTaskKeys = new Set<string>();
 let isProcessing = false;
 let workerInterval: NodeJS.Timeout | null = null;
+
+export function buildTranslationTaskKey(params: SubtitleRequest, sourceHash: string): string {
+  return `${generateCacheKey(params)}|${sourceHash}`;
+}
+
+export function isTranslationInFlight(taskKey: string): boolean {
+  return inFlightTaskKeys.has(taskKey);
+}
 
 /**
  * Enqueue translation task
@@ -39,7 +49,14 @@ export async function enqueueTranslation(
   params: SubtitleRequest,
   originalJson: YouTubeTimedTextResponse,
   sourceHash: string
-): Promise<string> {
+): Promise<string | null> {
+  const taskKey = buildTranslationTaskKey(params, sourceHash);
+  if (inFlightTaskKeys.has(taskKey)) {
+    console.log(`[Queue] Translation already in progress: ${taskKey}`);
+    return null;
+  }
+
+  inFlightTaskKeys.add(taskKey);
   const taskId = randomUUID();
 
   const task: TranslationTask = {
@@ -48,20 +65,26 @@ export async function enqueueTranslation(
     originalJson,
     sourceHash,
     createdAt: Date.now(),
+    taskKey,
   };
 
-  taskQueue.push(task);
+  try {
+    taskQueue.push(task);
 
-  // Create pending job in database
-  await createCaptionJob({
-    id: taskId,
-    videoId: params.v,
-    lang: params.lang,
-    track: params.kind || 'asr',
-    fmt: params.fmt || 'json3',
-    sourceHash,
-    status: 'pending',
-  });
+    // Create pending job in database
+    await createCaptionJob({
+      id: taskId,
+      videoId: params.v,
+      lang: params.lang,
+      track: params.kind || 'asr',
+      fmt: params.fmt || 'json3',
+      sourceHash,
+      status: 'pending',
+    });
+  } catch (error) {
+    inFlightTaskKeys.delete(taskKey);
+    throw error;
+  }
 
   console.log(`[Queue] Enqueued task: ${taskId} (queue size: ${taskQueue.length})`);
 
@@ -195,6 +218,8 @@ async function processTask(task: TranslationTask): Promise<void> {
 
     // Schedule retry
     await incrementJobRetry(id);
+  } finally {
+    inFlightTaskKeys.delete(task.taskKey);
   }
 }
 
@@ -223,4 +248,6 @@ export default {
   stopWorker,
   getQueueStatus,
   clearQueue,
+  buildTranslationTaskKey,
+  isTranslationInFlight,
 };
