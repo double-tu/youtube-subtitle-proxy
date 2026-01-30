@@ -341,50 +341,79 @@ export async function translateBatchWithContext(
   const precedingLines = Math.max(0, config.translationContext.precedingContextLines);
   const followingLines = Math.max(0, config.translationContext.followingContextLines);
   const maxTokens = config.translationContext.maxTokens;
+  const totalBatches = Math.max(1, Math.ceil(cues.length / batchSize));
+  const overallStart = Date.now();
 
   const translatedTexts: Array<string | null> = new Array(cues.length).fill(null);
 
-  for (let start = 0; start < cues.length; start += batchSize) {
-    const end = Math.min(start + batchSize, cues.length);
-    const batch = buildContextBatch(
-      cues,
-      translatedTexts,
-      start,
-      end,
-      precedingLines,
-      followingLines
+  console.log(
+    `[Translator] Context-aware translation started: ${cues.length} segments, batches=${totalBatches}, batchSize=${batchSize}, preceding=${precedingLines}, following=${followingLines}`
+  );
+
+  try {
+    for (let start = 0; start < cues.length; start += batchSize) {
+      const end = Math.min(start + batchSize, cues.length);
+      const batchIndex = Math.floor(start / batchSize) + 1;
+      const batchStart = Date.now();
+
+      console.log(
+        `[Translator] Context batch ${batchIndex}/${totalBatches} started: segments ${start}-${end - 1}`
+      );
+
+      const batch = buildContextBatch(
+        cues,
+        translatedTexts,
+        start,
+        end,
+        precedingLines,
+        followingLines
+      );
+
+      const prompt = buildContextualTranslationPrompt(batch, targetLanguage, summary || undefined);
+
+      const response = await client.chat.completions.create({
+        model: config.openai.model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: maxTokens,
+      });
+
+      const content = response.choices[0]?.message?.content?.trim();
+      if (!content) {
+        throw new Error('Empty translation response from OpenAI');
+      }
+
+      const parsed = parseTranslationBatch(content, batch.current.length);
+
+      const expectedIds = new Set(batch.current.map(item => item.index));
+      for (const item of parsed) {
+        if (!expectedIds.has(item.id)) {
+          throw new Error(`Unexpected translation id ${item.id} in batch ${start}-${end - 1}`);
+        }
+        translatedTexts[item.id] = item.translation;
+      }
+
+      for (const id of expectedIds) {
+        if (!translatedTexts[id]) {
+          throw new Error(`Missing translation for id ${id} in batch ${start}-${end - 1}`);
+        }
+      }
+
+      console.log(
+        `[Translator] Context batch ${batchIndex}/${totalBatches} completed in ${Date.now() - batchStart}ms`
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[Translator] Context-aware translation failed after ${Date.now() - overallStart}ms: ${message}`
     );
-
-    const prompt = buildContextualTranslationPrompt(batch, targetLanguage, summary || undefined);
-
-    const response = await client.chat.completions.create({
-      model: config.openai.model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: maxTokens,
-    });
-
-    const content = response.choices[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error('Empty translation response from OpenAI');
-    }
-
-    const parsed = parseTranslationBatch(content, batch.current.length);
-
-    const expectedIds = new Set(batch.current.map(item => item.index));
-    for (const item of parsed) {
-      if (!expectedIds.has(item.id)) {
-        throw new Error(`Unexpected translation id ${item.id} in batch ${start}-${end - 1}`);
-      }
-      translatedTexts[item.id] = item.translation;
-    }
-
-    for (const id of expectedIds) {
-      if (!translatedTexts[id]) {
-        throw new Error(`Missing translation for id ${id} in batch ${start}-${end - 1}`);
-      }
-    }
+    throw error;
   }
+
+  console.log(
+    `[Translator] Context-aware translation completed in ${Date.now() - overallStart}ms`
+  );
 
   return cues.map((cue, index) => ({
     ...cue,
