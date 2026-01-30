@@ -47,12 +47,16 @@ export function renderYouTubeTimedText(cues: SubtitleCue[]): YouTubeTimedTextRes
   const events = cues.map(cue => ({
     tStartMs: Math.floor(cue.startTime),
     dDurationMs: Math.floor(cue.endTime - cue.startTime),
+    wWinId: 1,
     segs: [{ utf8: cue.text }],
   }));
 
   return {
-    events,
     wireMagic: 'pb3',
+    pens: [{}],
+    wsWinStyles: [{}, { mhModeHint: 2, juJustifCode: 0, sdScrollDir: 3 }],
+    wpWinPositions: [{}, { apPoint: 6, ahHorPos: 20, avVerPos: 100, rcRows: 2, ccCols: 40 }],
+    events,
   };
 }
 

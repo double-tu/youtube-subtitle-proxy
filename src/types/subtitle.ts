@@ -15,6 +15,11 @@ export interface SubtitleCue {
 export interface YouTubeTimedTextEvent {
   tStartMs: number;
   dDurationMs: number;
+  wWinId?: number;
+  wsWinStyleId?: number;
+  wpWinPosId?: number;
+  aAppend?: number;
+  id?: number;
   segs?: Array<{
     utf8: string;
     acAsrConf?: number;
@@ -24,6 +29,9 @@ export interface YouTubeTimedTextEvent {
 export interface YouTubeTimedTextResponse {
   events: YouTubeTimedTextEvent[];
   wireMagic?: string;
+  pens?: Array<Record<string, number | string | boolean>>;
+  wsWinStyles?: Array<Record<string, number | string | boolean>>;
+  wpWinPositions?: Array<Record<string, number | string | boolean>>;
 }
 
 // ========================================

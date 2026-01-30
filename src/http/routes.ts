@@ -7,6 +7,8 @@ import { getConfig } from '../config/env.js';
 import { fetchYouTubeSubtitle, generateCacheKey, generateSourceHash } from '../services/youtube.js';
 import { getBilingualSubtitle } from '../services/cache.js';
 import { enqueueTranslation, getQueueStatus } from '../queue/queue.js';
+import { parseWebVTT } from '../subtitle/parse.js';
+import { renderYouTubeTimedText } from '../subtitle/render.js';
 import type { SubtitleRequest, ErrorResponse, HealthCheckResponse } from '../types/subtitle.js';
 
 const app = new Hono();
@@ -72,49 +74,22 @@ const buildOriginalTimedtextUrl = (c: Context): string => {
   const requestUrl = new URL(c.req.url);
   const baseUrl = new URL('https://www.youtube.com/api/timedtext');
   baseUrl.search = requestUrl.search;
+  baseUrl.searchParams.delete('original_url');
   return baseUrl.toString();
 };
 
-const handleSubtitleRequest = async (c: Context, useOriginalUrl: boolean = false) => {
+const handleSubtitleRequest = async (c: Context) => {
   try {
     // Parse query parameters
     const query = c.req.query();
-    const signedRequestKeys = [
-      'signature',
-      'sparams',
-      'pot',
-      'potc',
-      'ei',
-      'exp',
-      'xoaf',
-      'xowf',
-      'xorb',
-      'xobt',
-      'xovt',
-      'key',
-      'ip',
-      'ipbits',
-      'expire',
-      'caps',
-      'opi',
-      'c',
-      'cver',
-      'cplayer',
-      'cos',
-      'cosver',
-      'cplatform',
-    ];
-    const shouldPreserveOriginalQuery = useOriginalUrl
-      || signedRequestKeys.some((key) => Object.prototype.hasOwnProperty.call(query, key));
-    const originalUrl = query.original_url
-      || (shouldPreserveOriginalQuery ? buildOriginalTimedtextUrl(c) : undefined);
+    const originalUrl = query.original_url || buildOriginalTimedtextUrl(c);
     const params: SubtitleRequest = {
       v: query.v || '',
       lang: query.lang || '',
       tlang: query.tlang || 'zh-CN',
       kind: query.kind || 'asr',
       fmt: query.fmt || 'json3',
-      original_url: originalUrl || query.original_url,
+      original_url: originalUrl,
     };
 
     // Validate required parameters
@@ -143,9 +118,21 @@ const handleSubtitleRequest = async (c: Context, useOriginalUrl: boolean = false
     if (cachedBilingual) {
       console.log(`[API] Cache hit for ${params.v} (${params.lang} -> ${params.tlang})`);
 
-      // Return cached bilingual subtitle
-      return c.text(cachedBilingual, 200, {
-        'Content-Type': 'text/vtt; charset=utf-8',
+      const requestedFormat = params.fmt?.toLowerCase();
+      if (requestedFormat === 'vtt') {
+        // Return cached bilingual subtitle as WebVTT
+        return c.text(cachedBilingual, 200, {
+          'Content-Type': 'text/vtt; charset=utf-8',
+          'X-Translation-Status': 'completed',
+          'X-Cache-Status': 'HIT',
+          'X-Video-Id': params.v,
+        });
+      }
+
+      // Return cached bilingual subtitle as YouTube timedtext JSON
+      const cues = parseWebVTT(cachedBilingual);
+      const timedtextJson = renderYouTubeTimedText(cues);
+      return c.json(timedtextJson, 200, {
         'X-Translation-Status': 'completed',
         'X-Cache-Status': 'HIT',
         'X-Video-Id': params.v,
@@ -212,8 +199,8 @@ const handleSubtitleRequest = async (c: Context, useOriginalUrl: boolean = false
   }
 };
 
-app.get('/api/subtitle', (c) => handleSubtitleRequest(c));
-app.get('/api/timedtext', (c) => handleSubtitleRequest(c, true));
+app.get('/api/subtitle', handleSubtitleRequest);
+app.get('/api/timedtext', handleSubtitleRequest);
 
 // ========================================
 // Cache Statistics (Admin only)
