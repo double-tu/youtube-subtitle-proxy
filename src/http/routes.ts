@@ -4,11 +4,11 @@
 import { Hono, type Context } from 'hono';
 import { getDatabase, getCacheStats } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
-import { fetchYouTubeSubtitle, generateCacheKey, generateSourceHash } from '../services/youtube.js';
+import { fetchYouTubeTimedText, generateCacheKey, generateSourceHash } from '../services/youtube.js';
 import { getBilingualSubtitle } from '../services/cache.js';
 import { enqueueTranslation, getQueueStatus } from '../queue/queue.js';
 import { parseWebVTT } from '../subtitle/parse.js';
-import { renderYouTubeTimedText } from '../subtitle/render.js';
+import { renderYouTubeSrv3, renderYouTubeTimedText } from '../subtitle/render.js';
 import type { SubtitleRequest, ErrorResponse, HealthCheckResponse } from '../types/subtitle.js';
 
 const app = new Hono();
@@ -82,13 +82,14 @@ const handleSubtitleRequest = async (c: Context) => {
   try {
     // Parse query parameters
     const query = c.req.query();
+    const fmtParam = (query.fmt || query.format || 'json3').toString();
     const originalUrl = query.original_url || buildOriginalTimedtextUrl(c);
     const params: SubtitleRequest = {
       v: query.v || '',
       lang: query.lang || '',
       tlang: query.tlang || 'zh-CN',
       kind: query.kind || 'asr',
-      fmt: query.fmt || 'json3',
+      fmt: fmtParam,
       original_url: originalUrl,
     };
 
@@ -129,8 +130,18 @@ const handleSubtitleRequest = async (c: Context) => {
         });
       }
 
-      // Return cached bilingual subtitle as YouTube timedtext JSON
       const cues = parseWebVTT(cachedBilingual);
+      if (requestedFormat?.startsWith('srv')) {
+        const srv3 = renderYouTubeSrv3(cues);
+        return c.text(srv3, 200, {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'X-Translation-Status': 'completed',
+          'X-Cache-Status': 'HIT',
+          'X-Video-Id': params.v,
+        });
+      }
+
+      // Return cached bilingual subtitle as YouTube timedtext JSON
       const timedtextJson = renderYouTubeTimedText(cues);
       return c.json(timedtextJson, 200, {
         'X-Translation-Status': 'completed',
@@ -142,9 +153,9 @@ const handleSubtitleRequest = async (c: Context) => {
     console.log(`[API] Cache miss for ${params.v} (${params.lang} -> ${params.tlang})`);
 
     // Fetch original subtitle from YouTube
-    let originalJson;
+    let originalResult;
     try {
-      originalJson = await fetchYouTubeSubtitle(params);
+      originalResult = await fetchYouTubeTimedText(params);
     } catch (error) {
       console.error(`[API] Failed to fetch YouTube subtitle:`, error);
 
@@ -157,27 +168,22 @@ const handleSubtitleRequest = async (c: Context) => {
     }
 
     // Generate source hash
-    const sourceHash = generateSourceHash(JSON.stringify(originalJson));
+    const sourceHash = generateSourceHash(JSON.stringify(originalResult.parsed));
 
     // Enqueue translation task (async, non-blocking)
-    enqueueTranslation(params, originalJson, sourceHash).catch(error => {
+    enqueueTranslation(params, originalResult.parsed, sourceHash).catch(error => {
       console.error(`[API] Failed to enqueue translation:`, error);
     });
 
-    // Return original subtitle immediately
-    // Convert format if needed
-    let responseContent: string;
-    let contentType: string;
-
-    if (params.fmt === 'vtt') {
-      // Convert JSON to WebVTT (simplified - would need full implementation)
-      responseContent = 'WEBVTT\n\n[Original subtitle - translation in progress]';
-      contentType = 'text/vtt; charset=utf-8';
-    } else {
-      // Return original JSON
-      responseContent = JSON.stringify(originalJson);
-      contentType = 'application/json; charset=utf-8';
-    }
+    // Return original subtitle immediately (keep original format)
+    const responseContent = originalResult.rawText;
+    const requestedFormat = params.fmt?.toLowerCase();
+    const contentType = originalResult.contentType
+      || (requestedFormat === 'vtt'
+        ? 'text/vtt; charset=utf-8'
+        : requestedFormat?.startsWith('srv')
+          ? 'text/xml; charset=utf-8'
+          : 'application/json; charset=utf-8');
 
     return c.text(responseContent, 200, {
       'Content-Type': contentType,

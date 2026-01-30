@@ -5,13 +5,21 @@
  */
 import type { YouTubeTimedTextResponse, SubtitleRequest } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
+import { parseWebVTT, parseYouTubeSrv3 } from '../subtitle/parse.js';
+import { renderYouTubeTimedText } from '../subtitle/render.js';
+
+export interface TimedTextFetchResult {
+  rawText: string;
+  contentType: string | null;
+  parsed: YouTubeTimedTextResponse;
+}
 
 /**
  * Fetch subtitle from YouTube timedtext API
  */
-export async function fetchYouTubeSubtitle(
+export async function fetchYouTubeTimedText(
   params: SubtitleRequest
-): Promise<YouTubeTimedTextResponse> {
+): Promise<TimedTextFetchResult> {
   const config = getConfig();
 
   // Use original_url if provided, otherwise construct
@@ -43,13 +51,15 @@ export async function fetchYouTubeSubtitle(
       throw new Error(`YouTube API returned ${response.status}: ${response.statusText}`);
     }
 
-    const json = await response.json() as YouTubeTimedTextResponse;
+    const rawText = await response.text();
+    const contentType = response.headers.get('content-type');
+    const parsed = parseTimedTextResponse(rawText, contentType);
 
-    if (!json.events || !Array.isArray(json.events)) {
+    if (!parsed.events || !Array.isArray(parsed.events)) {
       throw new Error('Invalid timedtext response: missing events array');
     }
 
-    return json;
+    return { rawText, contentType, parsed };
   } catch (error) {
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
@@ -59,6 +69,34 @@ export async function fetchYouTubeSubtitle(
     }
     throw error;
   }
+}
+
+export async function fetchYouTubeSubtitle(
+  params: SubtitleRequest
+): Promise<YouTubeTimedTextResponse> {
+  const result = await fetchYouTubeTimedText(params);
+  return result.parsed;
+}
+
+function parseTimedTextResponse(
+  rawText: string,
+  contentType: string | null
+): YouTubeTimedTextResponse {
+  const trimmed = rawText.trim();
+  const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+  const isJsonContent = contentType?.includes('json');
+
+  if (looksLikeJson || isJsonContent) {
+    return JSON.parse(rawText) as YouTubeTimedTextResponse;
+  }
+
+  if (trimmed.startsWith('WEBVTT')) {
+    const cues = parseWebVTT(rawText);
+    return renderYouTubeTimedText(cues);
+  }
+
+  const cues = parseYouTubeSrv3(rawText);
+  return renderYouTubeTimedText(cues);
 }
 
 /**
@@ -152,6 +190,7 @@ export function generateSourceHash(content: string): string {
 
 export default {
   fetchYouTubeSubtitle,
+  fetchYouTubeTimedText,
   checkSubtitleAvailability,
   getAvailableLanguages,
   generateCacheKey,

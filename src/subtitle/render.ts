@@ -61,6 +61,35 @@ export function renderYouTubeTimedText(cues: SubtitleCue[]): YouTubeTimedTextRes
 }
 
 /**
+ * Render subtitle cues to YouTube timedtext SRV3 XML format
+ */
+export function renderYouTubeSrv3(cues: SubtitleCue[]): string {
+  let xml = '<?xml version="1.0" encoding="utf-8" ?>\n';
+  xml += '<timedtext format="3">\n';
+  xml += '  <head>\n';
+  xml += '    <pen id="0" />\n';
+  xml += '    <ws id="0" />\n';
+  xml += '    <ws id="1" mh="2" ju="0" sd="3" />\n';
+  xml += '    <wp id="0" />\n';
+  xml += '    <wp id="1" ap="6" ah="20" av="100" rc="2" cc="40" />\n';
+  xml += '  </head>\n';
+  xml += '  <body>\n';
+  xml += '    <w t="0" id="1" wp="1" ws="1"/>\n';
+
+  for (const cue of cues) {
+    const start = Math.floor(cue.startTime);
+    const duration = Math.max(0, Math.floor(cue.endTime - cue.startTime));
+    const text = escapeXml(cue.text).replace(/\n/g, '<br/>');
+    xml += `    <p t="${start}" d="${duration}" w="1">${text}</p>\n`;
+  }
+
+  xml += '  </body>\n';
+  xml += '</timedtext>';
+
+  return xml;
+}
+
+/**
  * Format milliseconds to WebVTT timestamp
  */
 function formatTimestamp(ms: number): string {
@@ -89,6 +118,16 @@ function escapeWebVTT(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/-->/g, '--&gt;')
+    .trim();
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
     .trim();
 }
 
@@ -141,6 +180,7 @@ export function mergeBilingualCues(
 export default {
   renderWebVTT,
   renderYouTubeTimedText,
+  renderYouTubeSrv3,
   createBilingualCue,
   mergeBilingualCues,
 };

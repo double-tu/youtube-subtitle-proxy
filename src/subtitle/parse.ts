@@ -45,6 +45,67 @@ export function parseYouTubeTimedText(json: YouTubeTimedTextResponse): SubtitleC
 }
 
 /**
+ * Parse YouTube timedtext SRV3 XML to subtitle cues
+ */
+export function parseYouTubeSrv3(xml: string): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  const normalized = xml.replace(/\r\n/g, '\n');
+  const paragraphRegex = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
+
+  let match: RegExpExecArray | null;
+  while ((match = paragraphRegex.exec(normalized)) !== null) {
+    const attrs = match[1] || '';
+    const body = match[2] || '';
+
+    const startAttr = extractAttribute(attrs, 't');
+    const durationAttr = extractAttribute(attrs, 'd');
+    const startTime = startAttr ? parseInt(startAttr, 10) : NaN;
+    const duration = durationAttr ? parseInt(durationAttr, 10) : NaN;
+
+    if (!Number.isFinite(startTime) || !Number.isFinite(duration)) {
+      continue;
+    }
+
+    const text = decodeXmlEntities(
+      body
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .trim()
+    );
+
+    if (!text) {
+      continue;
+    }
+
+    cues.push({
+      startTime,
+      endTime: startTime + duration,
+      text,
+    });
+  }
+
+  return cues;
+}
+
+function extractAttribute(attrs: string, name: string): string | null {
+  const match = new RegExp(`${name}="([^"]*)"`, 'i').exec(attrs);
+  return match ? match[1] : null;
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#10;/g, '\n')
+    .replace(/&#13;/g, '')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+}
+
+/**
  * Parse WebVTT format to subtitle cues
  */
 export function parseWebVTT(vtt: string): SubtitleCue[] {
@@ -149,6 +210,7 @@ export function sortCues(cues: SubtitleCue[]): SubtitleCue[] {
 
 export default {
   parseYouTubeTimedText,
+  parseYouTubeSrv3,
   parseWebVTT,
   validateCues,
   sortCues,
