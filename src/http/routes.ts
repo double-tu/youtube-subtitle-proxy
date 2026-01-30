@@ -29,7 +29,7 @@ app.use('*', async (c, next) => {
     return c.body(null, 204);
   }
 
-  await next();
+  return await next();
 });
 
 // ========================================
