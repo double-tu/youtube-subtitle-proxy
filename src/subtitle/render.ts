@@ -44,6 +44,18 @@ export function renderWebVTT(cues: SubtitleCue[], options?: {
  * Render subtitle cues to YouTube timedtext JSON format
  */
 export function renderYouTubeTimedText(cues: SubtitleCue[]): YouTubeTimedTextResponse {
+  const maxEndTimeMs = cues.reduce((max, cue) => (
+    Math.max(max, Math.floor(cue.endTime))
+  ), 0);
+  const windowDurationMs = Math.max(maxEndTimeMs, 60 * 60 * 1000);
+  const initEvent = {
+    tStartMs: 0,
+    dDurationMs: windowDurationMs,
+    id: 1,
+    wpWinPosId: 1,
+    wsWinStyleId: 1,
+  };
+
   const events = cues.map(cue => ({
     tStartMs: Math.floor(cue.startTime),
     dDurationMs: Math.floor(cue.endTime - cue.startTime),
@@ -56,7 +68,7 @@ export function renderYouTubeTimedText(cues: SubtitleCue[]): YouTubeTimedTextRes
     pens: [{}],
     wsWinStyles: [{}, { mhModeHint: 2, juJustifCode: 0, sdScrollDir: 3 }],
     wpWinPositions: [{}, { apPoint: 6, ahHorPos: 20, avVerPos: 100, rcRows: 2, ccCols: 40 }],
-    events,
+    events: [initEvent, ...events],
   };
 }
 
