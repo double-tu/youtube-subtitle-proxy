@@ -7,6 +7,7 @@ import { LRUCache } from 'lru-cache';
 import { getDatabase, updateCacheMetadata } from '../db/sqlite.js';
 import { getConfig } from '../config/env.js';
 import type { CaptionJob, JobStatus } from '../types/subtitle.js';
+import { parseCacheKey } from './youtube.js';
 
 // LRU cache instance
 let lruCache: LRUCache<string, string> | null = null;
@@ -41,15 +42,15 @@ export async function getBilingualSubtitle(cacheKey: string): Promise<string | n
 
   // Try SQLite persistent cache
   const db = getDatabase();
-  const [videoId, lang] = cacheKey.split('|');
+  const { videoId, lang, tlang, track, fmt } = parseCacheKey(cacheKey);
 
   const row = db.prepare(`
     SELECT bilingual_json, status
     FROM caption_jobs
-    WHERE video_id = ? AND lang = ? AND status = 'done'
+    WHERE video_id = ? AND lang = ? AND tlang = ? AND track = ? AND fmt = ? AND status = 'done'
     ORDER BY created_at DESC
     LIMIT 1
-  `).get(videoId, lang) as { bilingual_json: string; status: JobStatus } | undefined;
+  `).get(videoId, lang, tlang, track, fmt) as { bilingual_json: string; status: JobStatus } | undefined;
 
   if (row && row.bilingual_json) {
     console.log(`[Cache] SQLite cache hit: ${cacheKey}`);
@@ -85,6 +86,7 @@ export async function createCaptionJob(params: {
   id: string;
   videoId: string;
   lang: string;
+  tlang: string;
   track: string;
   fmt: string;
   sourceHash: string;
@@ -98,10 +100,10 @@ export async function createCaptionJob(params: {
 
   db.prepare(`
     INSERT INTO caption_jobs (
-      id, video_id, lang, track, fmt, source_hash, status,
+      id, video_id, lang, tlang, track, fmt, source_hash, status,
       bilingual_json, created_at, updated_at, expires_at, retry_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-    ON CONFLICT(video_id, lang, track, fmt, source_hash) DO UPDATE SET
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    ON CONFLICT(video_id, lang, tlang, track, fmt, source_hash) DO UPDATE SET
       status = excluded.status,
       bilingual_json = excluded.bilingual_json,
       updated_at = excluded.updated_at
@@ -109,6 +111,7 @@ export async function createCaptionJob(params: {
     params.id,
     params.videoId,
     params.lang,
+    params.tlang,
     params.track,
     params.fmt,
     params.sourceHash,
@@ -170,6 +173,7 @@ export async function getCaptionJob(jobId: string): Promise<CaptionJob | null> {
 export async function getCaptionJobByKey(params: {
   videoId: string;
   lang: string;
+  tlang: string;
   track: string;
   fmt: string;
   sourceHash: string;
@@ -179,12 +183,13 @@ export async function getCaptionJobByKey(params: {
   const row = db.prepare(`
     SELECT id, status, updated_at
     FROM caption_jobs
-    WHERE video_id = ? AND lang = ? AND track = ? AND fmt = ? AND source_hash = ?
+    WHERE video_id = ? AND lang = ? AND tlang = ? AND track = ? AND fmt = ? AND source_hash = ?
     ORDER BY created_at DESC
     LIMIT 1
   `).get(
     params.videoId,
     params.lang,
+    params.tlang,
     params.track,
     params.fmt,
     params.sourceHash

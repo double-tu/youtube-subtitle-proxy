@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS caption_jobs (
   -- Video identification
   video_id TEXT NOT NULL,
   lang TEXT NOT NULL,              -- Original language (en, ja, ko)
+  tlang TEXT NOT NULL,             -- Target language (zh-CN, ja, etc.)
   track TEXT NOT NULL,             -- Track name/ID
   fmt TEXT NOT NULL,               -- Format (vtt, srv3)
   source_hash TEXT NOT NULL,       -- SHA256 hash of original subtitle (detect changes)
@@ -36,7 +37,7 @@ CREATE TABLE IF NOT EXISTS caption_jobs (
   expires_at INTEGER NOT NULL,     -- Unix timestamp (ms) - TTL cleanup
 
   -- Ensure unique combination for cache key
-  UNIQUE(video_id, lang, track, fmt, source_hash)
+  UNIQUE(video_id, lang, tlang, track, fmt, source_hash)
 );
 
 -- Indexes for performance

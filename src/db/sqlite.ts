@@ -50,10 +50,78 @@ export function initDatabase(config: DatabaseConfig): Database.Database {
   // Initialize schema
   const schemaSQL = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
   db.exec(schemaSQL);
+  migrateCaptionJobsSchema(db);
 
   console.log(`[DB] SQLite database initialized at: ${config.path}`);
 
   return db;
+}
+
+function migrateCaptionJobsSchema(database: Database.Database): void {
+  const columns = database.prepare(`
+    SELECT name FROM pragma_table_info('caption_jobs')
+  `).all() as Array<{ name: string }>;
+
+  const hasTargetLanguageColumn = columns.some((column) => column.name === 'tlang');
+  if (hasTargetLanguageColumn) {
+    return;
+  }
+
+  console.log('[DB] Migrating caption_jobs schema to include target language dimensions');
+  database.pragma('foreign_keys = OFF');
+
+  try {
+    const migrate = database.transaction(() => {
+      database.exec(`
+        CREATE TABLE caption_jobs_v2 (
+          id TEXT PRIMARY KEY,
+          video_id TEXT NOT NULL,
+          lang TEXT NOT NULL,
+          tlang TEXT NOT NULL,
+          track TEXT NOT NULL,
+          fmt TEXT NOT NULL,
+          source_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('pending', 'translating', 'done', 'failed')),
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          next_retry_at INTEGER,
+          error_code TEXT,
+          error_message TEXT,
+          bilingual_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          UNIQUE(video_id, lang, tlang, track, fmt, source_hash)
+        );
+
+        INSERT INTO caption_jobs_v2 (
+          id, video_id, lang, tlang, track, fmt, source_hash, status,
+          retry_count, next_retry_at, error_code, error_message,
+          bilingual_json, created_at, updated_at, expires_at
+        )
+        SELECT
+          id, video_id, lang, 'zh-CN', track, fmt, source_hash, status,
+          retry_count, next_retry_at, error_code, error_message,
+          bilingual_json, created_at, updated_at, expires_at
+        FROM caption_jobs;
+
+        DROP TABLE caption_jobs;
+        ALTER TABLE caption_jobs_v2 RENAME TO caption_jobs;
+
+        CREATE INDEX IF NOT EXISTS idx_caption_jobs_status
+        ON caption_jobs(status, next_retry_at);
+
+        CREATE INDEX IF NOT EXISTS idx_caption_jobs_expires
+        ON caption_jobs(expires_at);
+
+        CREATE INDEX IF NOT EXISTS idx_caption_jobs_video_id
+        ON caption_jobs(video_id);
+      `);
+    });
+
+    migrate();
+  } finally {
+    database.pragma('foreign_keys = ON');
+  }
 }
 
 /**

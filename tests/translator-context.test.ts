@@ -70,7 +70,7 @@ describe('translator context batching', () => {
         choices: [
           {
             message: {
-              content: '[{"id":2,"translation":"T2"}]',
+              content: '[{"id":2,"translation":"T2"},{"id":3,"translation":"T3"}]',
             },
           },
         ],
@@ -90,6 +90,7 @@ describe('translator context batching', () => {
       { startTime: 0, endTime: 1000, text: 'Hello world.' },
       { startTime: 1000, endTime: 2000, text: 'This is a test.' },
       { startTime: 2000, endTime: 3000, text: 'Final line.' },
+      { startTime: 3000, endTime: 4000, text: 'Wrap it up.' },
     ];
 
     const results = await translateToBilingual(cues, 'zh-CN', 2);
@@ -98,6 +99,7 @@ describe('translator context batching', () => {
       'Hello world.\nT0',
       'This is a test.\nT1',
       'Final line.\nT2',
+      'Wrap it up.\nT3',
     ]);
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
@@ -106,9 +108,10 @@ describe('translator context batching', () => {
     expect(secondPrompt).toContain('Preceding Context (Original)');
     expect(secondPrompt).toContain('[1] This is a test.');
     expect(secondPrompt).toContain('[2] Final line.');
+    expect(secondPrompt).toContain('[3] Wrap it up.');
   });
 
-  it('retries failed batches then falls back to per-line translation', async () => {
+  it('retries failed batches, splits them, then falls back to per-line translation', async () => {
     mockCreate
       .mockResolvedValueOnce({
         choices: [

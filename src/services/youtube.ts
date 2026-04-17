@@ -7,11 +7,28 @@ import type { YouTubeTimedTextResponse, SubtitleRequest } from '../types/subtitl
 import { getConfig } from '../config/env.js';
 import { parseWebVTT, parseYouTubeSrv3 } from '../subtitle/parse.js';
 import { renderYouTubeTimedText } from '../subtitle/render.js';
+import { LRUCache } from 'lru-cache';
 
 export interface TimedTextFetchResult {
   rawText: string;
   contentType: string | null;
   parsed: YouTubeTimedTextResponse;
+}
+
+const ORIGINAL_SUBTITLE_CACHE_TTL_MS = 60 * 1000;
+const ORIGINAL_SUBTITLE_CACHE_MAX_ITEMS = 200;
+
+let timedTextCache: LRUCache<string, TimedTextFetchResult> | null = null;
+
+function getTimedTextCache(): LRUCache<string, TimedTextFetchResult> {
+  if (!timedTextCache) {
+    timedTextCache = new LRUCache<string, TimedTextFetchResult>({
+      max: ORIGINAL_SUBTITLE_CACHE_MAX_ITEMS,
+      ttl: ORIGINAL_SUBTITLE_CACHE_TTL_MS,
+    });
+  }
+
+  return timedTextCache;
 }
 
 /**
@@ -28,6 +45,12 @@ export async function fetchYouTubeTimedText(
     url = params.original_url;
   } else {
     url = buildYouTubeTimedTextUrl(params);
+  }
+
+  const cache = getTimedTextCache();
+  const cached = cache.get(url);
+  if (cached) {
+    return cached;
   }
 
   try {
@@ -59,7 +82,9 @@ export async function fetchYouTubeTimedText(
       throw new Error('Invalid timedtext response: missing events array');
     }
 
-    return { rawText, contentType, parsed };
+    const result = { rawText, contentType, parsed };
+    cache.set(url, result);
+    return result;
   } catch (error) {
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
@@ -174,6 +199,24 @@ export function generateCacheKey(params: SubtitleRequest): string {
   return parts.join('|');
 }
 
+export function parseCacheKey(cacheKey: string): {
+  videoId: string;
+  lang: string;
+  tlang: string;
+  track: string;
+  fmt: string;
+} {
+  const [videoId, lang, tlang = 'zh-CN', track = 'asr', fmt = 'json3'] = cacheKey.split('|');
+
+  return {
+    videoId,
+    lang,
+    tlang,
+    track,
+    fmt,
+  };
+}
+
 /**
  * Generate source hash for subtitle content
  */
@@ -194,5 +237,6 @@ export default {
   checkSubtitleAvailability,
   getAvailableLanguages,
   generateCacheKey,
+  parseCacheKey,
   generateSourceHash,
 };

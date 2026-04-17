@@ -45,6 +45,7 @@ export interface CaptionJob {
   id: string;
   video_id: string;
   lang: string;
+  tlang: string;
   track: string;
   fmt: string;
   source_hash: string;

@@ -196,6 +196,7 @@ const handleSubtitleRequest = async (c: Context) => {
     const existingJob = await getCaptionJobByKey({
       videoId: params.v,
       lang: params.lang,
+      tlang: params.tlang || 'zh-CN',
       track: params.kind || 'asr',
       fmt: params.fmt || 'json3',
       sourceHash,

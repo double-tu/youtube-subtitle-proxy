@@ -33,6 +33,7 @@ const taskQueue: TranslationTask[] = [];
 const inFlightTaskKeys = new Set<string>();
 let isProcessing = false;
 let workerInterval: NodeJS.Timeout | null = null;
+let drainScheduled = false;
 
 export function buildTranslationTaskKey(params: SubtitleRequest, sourceHash: string): string {
   return `${generateCacheKey(params)}|${sourceHash}`;
@@ -76,6 +77,7 @@ export async function enqueueTranslation(
       id: taskId,
       videoId: params.v,
       lang: params.lang,
+      tlang: params.tlang || 'zh-CN',
       track: params.kind || 'asr',
       fmt: params.fmt || 'json3',
       sourceHash,
@@ -89,9 +91,8 @@ export async function enqueueTranslation(
   console.log(`[Queue] Enqueued task: ${taskId} (queue size: ${taskQueue.length})`);
 
   // Start worker if not already running
-  if (!isProcessing) {
-    startWorker();
-  }
+  startWorker();
+  scheduleQueueDrain();
 
   return taskId;
 }
@@ -106,19 +107,8 @@ export function startWorker(): void {
 
   console.log('[Queue] Starting translation worker...');
 
-  workerInterval = setInterval(async () => {
-    if (isProcessing) {
-      return; // Already processing
-    }
-
-    try {
-      isProcessing = true;
-      await processQueue();
-    } catch (error) {
-      console.error('[Queue] Worker error:', error);
-    } finally {
-      isProcessing = false;
-    }
+  workerInterval = setInterval(() => {
+    scheduleQueueDrain();
   }, 5000); // Check queue every 5 seconds
 }
 
@@ -161,6 +151,36 @@ async function processQueue(): Promise<void> {
   // Process tasks in parallel
   const promises = tasksToProcess.map(task => processTask(task));
   await Promise.allSettled(promises);
+}
+
+function scheduleQueueDrain(): void {
+  if (drainScheduled) {
+    return;
+  }
+
+  drainScheduled = true;
+  queueMicrotask(() => {
+    drainScheduled = false;
+    void drainQueue();
+  });
+}
+
+async function drainQueue(): Promise<void> {
+  if (isProcessing) {
+    return;
+  }
+
+  try {
+    isProcessing = true;
+    await processQueue();
+  } catch (error) {
+    console.error('[Queue] Worker error:', error);
+  } finally {
+    isProcessing = false;
+    if (taskQueue.length > 0) {
+      scheduleQueueDrain();
+    }
+  }
 }
 
 /**

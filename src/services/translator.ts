@@ -371,6 +371,12 @@ type TranslationGuidance = {
   glossary: string | null;
 };
 
+type TranslationRange = {
+  start: number;
+  end: number;
+  label: string;
+};
+
 async function buildTranslationGuidance(
   cues: SubtitleCue[],
   targetLang: string
@@ -477,55 +483,44 @@ export async function translateBatchWithContext(
   );
 
   try {
-    const ranges: Array<{ start: number; end: number; batchIndex: number }> = [];
+    const ranges: TranslationRange[] = [];
     for (let start = 0; start < cues.length; start += batchSize) {
       const end = Math.min(start + batchSize, cues.length);
       const batchIndex = Math.floor(start / batchSize) + 1;
-      ranges.push({ start, end, batchIndex });
+      ranges.push({ start, end, label: `${batchIndex}/${totalBatches}` });
     }
 
     let nextRangeIndex = 0;
 
-    const fallbackBatch = async (
-      range: { start: number; end: number; batchIndex: number },
+    const fallbackSingleLine = async (
+      range: TranslationRange,
       reason: string
     ) => {
-      const { start, end, batchIndex } = range;
-      console.warn(
-        `[Translator] Context batch ${batchIndex}/${totalBatches} failed after ${batchRetries + 1} attempts: ${reason}. Falling back to per-line translation for segments ${start}-${end - 1}`
-      );
+      const cue = cues[range.start];
+      try {
+        const translation = await translateText(cue.text, targetLang);
+        translatedTexts[range.start] = translation;
+        console.log(
+          `[Translator] Single-line fallback completed for segment ${range.start} after batch failure: ${reason}`
+        );
+      } catch (error) {
+        console.error(
+          `[Translator] Single-line fallback failed for segment ${range.start}:`,
+          error
+        );
+        translatedTexts[range.start] = cue.text;
+      }
+    };
 
-      const lines = cues.slice(start, end);
-      const translations = await Promise.all(lines.map(async (cue, offset) => {
-        try {
-          return await translateText(
-            cue.text,
-            targetLang,
-            summary || undefined,
-            glossary || undefined
-          );
-        } catch (error) {
-          console.error(
-            `[Translator] Fallback translation failed for segment ${start + offset}:`,
-            error
-          );
-          return cue.text;
-        }
-      }));
-
-      for (let i = 0; i < translations.length; i++) {
-        translatedTexts[start + i] = translations[i];
+    const runBatch = async (range: TranslationRange) => {
+      const { start, end, label } = range;
+      if (end - start <= 1) {
+        await fallbackSingleLine(range, 'single-line range');
+        return;
       }
 
       console.log(
-        `[Translator] Fallback translation completed: segments ${start}-${end - 1}`
-      );
-    };
-
-    const runBatch = async (range: { start: number; end: number; batchIndex: number }) => {
-      const { start, end, batchIndex } = range;
-      console.log(
-        `[Translator] Context batch ${batchIndex}/${totalBatches} started: segments ${start}-${end - 1}`
+        `[Translator] Context batch ${label} started: segments ${start}-${end - 1}`
       );
 
       for (let attempt = 0; attempt <= batchRetries; attempt++) {
@@ -576,17 +571,35 @@ export async function translateBatchWithContext(
           }
 
           console.log(
-            `[Translator] Context batch ${batchIndex}/${totalBatches} completed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1})`
+            `[Translator] Context batch ${label} completed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1})`
           );
           return;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.warn(
-            `[Translator] Context batch ${batchIndex}/${totalBatches} failed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1}): ${message}`
+            `[Translator] Context batch ${label} failed in ${Date.now() - batchStart}ms (attempt ${attempt + 1}/${batchRetries + 1}): ${message}`
           );
 
           if (attempt >= batchRetries) {
-            await fallbackBatch(range, message);
+            if (end - start <= 1) {
+              await fallbackSingleLine(range, message);
+              return;
+            }
+
+            const midpoint = start + Math.ceil((end - start) / 2);
+            console.warn(
+              `[Translator] Splitting failed batch ${label} into ${start}-${midpoint - 1} and ${midpoint}-${end - 1}`
+            );
+            await runBatch({
+              start,
+              end: midpoint,
+              label: `${label}a`,
+            });
+            await runBatch({
+              start: midpoint,
+              end,
+              label: `${label}b`,
+            });
             return;
           }
         }
@@ -636,13 +649,14 @@ export async function translateText(
 
   const targetLanguage = resolveTargetLanguage(targetLang);
   const prompt = buildTranslationPrompt(text, targetLanguage, summary, glossary);
+  const maxTokens = Math.max(120, Math.min(240, Math.ceil(text.trim().length * 2)));
 
   try {
     const response = await client.chat.completions.create({
       model: config.openai.model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
-      max_tokens: 500,
+      max_tokens: maxTokens,
     });
 
     const translation = response.choices[0]?.message?.content?.trim();
