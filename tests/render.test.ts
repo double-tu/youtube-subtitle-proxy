@@ -224,4 +224,23 @@ describe('prepareCuesForRender', () => {
     expect(combinedText).toContain('交易员们大家好');
     expect(combinedText).toContain('Humble Trader');
   });
+
+  it('does not split a trailing proper-name sentence into an orphaned event', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 12360,
+        text: "Original\n交易者们大家好！如果你是这个频道的新朋友，我叫 Shay，又名 Humble Trader。欢迎来到终极日内交易策略速成课。这门一小时",
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared).toHaveLength(2);
+    expect(prepared[0].text).toContain('Humble Trader。');
+    expect(prepared[1].text.startsWith('欢迎来到终极日内交易策略速成课。')).toBe(true);
+  });
 });

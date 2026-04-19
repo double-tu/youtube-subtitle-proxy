@@ -158,4 +158,25 @@ describe('translator summary context', () => {
       expect(prompt).toContain('Glossary');
     }
   });
+
+  it('retries single-line translation when the model returns ellipsis output', async () => {
+    mockCreate
+      .mockResolvedValueOnce({ choices: [{ message: { content: '...这是一段省略的翻译...' } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: '这是完整翻译。' } }] });
+
+    const { translateText } = await loadTranslator({
+      TRANSLATION_SUMMARY_ENABLED: 'false',
+      TRANSLATION_GLOSSARY_ENABLED: 'false',
+    });
+
+    const result = await translateText(
+      'This source subtitle is long enough that ellipsis output should be rejected.',
+      'zh-CN',
+    );
+
+    expect(result).toBe('这是完整翻译。');
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    const retryPrompt = mockCreate.mock.calls[1][0].messages[0].content as string;
+    expect(retryPrompt).toContain('Do not use ellipsis');
+  });
 });

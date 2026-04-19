@@ -155,6 +155,10 @@ export interface AppConfig {
     maxTokens: number;
   };
 
+  translationSourceRestore: {
+    enabled: boolean;
+  };
+
   database: {
     path: string;
     verbose: boolean;

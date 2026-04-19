@@ -23,6 +23,7 @@ const languageNames: Record<string, string> = {
 const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const CHINESE_FRAGMENT_START_PATTERN = /^(?:的|了|着|过|并|但|而|或|及|将|把|被|在|对|给|从|向|为|与|且|则|也|又)/;
 const CHINESE_FRAGMENT_END_PATTERN = /(?:的|了|着|过|而|并|及|将|把|被|在|对|给|从|向|为|与)$/;
+const ELLIPSIS_PATTERN = /(?:\.\.\.|…|⋯)/;
 
 /**
  * Get OpenAI client instance
@@ -56,7 +57,26 @@ function buildTranslationPrompt(
     ? `\nGlossary (JSON, source -> ${targetLanguage}):\n${glossary}\n`
     : '';
 
-  return `Translate the following text to ${targetLanguage}. Use the context summary and glossary to keep terminology consistent if helpful, but do not include them in your output. Return only the translation without any explanation or additional text.${summarySection}${glossarySection}
+  return `Translate the following text to ${targetLanguage}. Use the context summary and glossary to keep terminology consistent if helpful, but do not include them in your output. Return only the translation without any explanation or additional text.
+Rules:
+- Do not omit, summarize, or replace content with ellipsis.
+- Do not output "...", "…", or similar placeholders unless the source itself contains them.${summarySection}${glossarySection}
+Text: ${text}`;
+}
+
+function buildStrictTranslationPrompt(
+  text: string,
+  targetLanguage: string
+): string {
+  return `Translate the following subtitle text to ${targetLanguage}.
+
+Hard rules:
+- Return only the translation.
+- Do not omit any content.
+- Do not summarize.
+- Do not use ellipsis or placeholders such as "...", "…", or "⋯" unless the source itself contains them.
+- Keep proper nouns intact when appropriate.
+
 Text: ${text}`;
 }
 
@@ -140,6 +160,7 @@ ${formatBatchLines(batch.current)}
 4. If a source line is a sentence fragment, translate it as a natural subtitle fragment for that same ID; do not complete it with text from neighboring IDs.
 5. Keep translation length close to the source line to avoid readability issues.
 6. Use the Glossary to keep proper nouns and key terms consistent.
+7. Do not use ellipsis or placeholder omissions such as "...", "…", or "⋯" unless the source line itself contains them.
 
 # Output Requirements
 Return only a JSON array with exactly ${batch.current.length} items.
@@ -212,6 +233,11 @@ type ParsedTranslation = {
   translation: string;
 };
 
+type ParsedSourceRewrite = {
+  id: number;
+  restored: string;
+};
+
 function parseTranslationBatch(text: string, expectedCount: number): ParsedTranslation[] {
   const parsed = extractJsonArray(text);
   if (!Array.isArray(parsed)) {
@@ -250,6 +276,73 @@ function parseTranslationBatch(text: string, expectedCount: number): ParsedTrans
   }
 
   return translations;
+}
+
+function buildSourceRestorePrompt(
+  batch: ContextBatch
+): string {
+  return `You are reconstructing noisy ASR subtitle fragments into cleaner source-language subtitle lines before translation.
+
+# Task
+Rewrite each line in Current Subtitle Batch into a more complete, natural source-language subtitle line.
+
+## Context Stream
+- Preceding Context (Original):
+${formatBatchLines(batch.preceding)}
+
+- Following Context (Preview):
+${formatBatchLines(batch.following)}
+
+## Current Subtitle Batch
+${formatBatchLines(batch.current)}
+
+# Rules
+1. Preserve the original language. Do not translate.
+2. Keep each ID aligned to the same moment in the transcript.
+3. You may repair punctuation, casing, and sentence completeness.
+4. You may move a few boundary words conceptually so the line reads naturally, but do not summarize or omit meaning.
+5. Do not invent new facts or terminology.
+6. Keep each restored line reasonably close in length to the original subtitle timing window.
+
+# Output
+Return only a JSON array with exactly ${batch.current.length} items.
+Each item must be: {"id": <number>, "restored": "<text>"}`;
+}
+
+function parseSourceRestoreBatch(text: string, expectedCount: number): ParsedSourceRewrite[] {
+  const parsed = extractJsonArray(text);
+  if (!Array.isArray(parsed)) {
+    throw new Error('Source restore response is not a JSON array');
+  }
+  if (parsed.length !== expectedCount) {
+    throw new Error(`Source restore response count mismatch: expected ${expectedCount}, got ${parsed.length}`);
+  }
+
+  return parsed.map((item) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error('Source restore response contains invalid item');
+    }
+
+    const rawId = (item as { id?: number | string }).id;
+    const id = typeof rawId === 'number' ? rawId : Number(rawId);
+    if (!Number.isInteger(id)) {
+      throw new Error('Source restore response item missing valid id');
+    }
+
+    const restored =
+      (item as { restored?: string }).restored
+      ?? (item as { text?: string }).text
+      ?? (item as { rewrite?: string }).rewrite;
+
+    if (typeof restored !== 'string' || !restored.trim()) {
+      throw new Error(`Source restore response item missing restored text for id ${id}`);
+    }
+
+    return {
+      id,
+      restored: restored.trim(),
+    };
+  });
 }
 
 async function requestSummary(
@@ -458,8 +551,13 @@ function isSuspiciousContextTranslation(sourceText: string, translation: string)
   const sourceLength = visibleLength(sourceText);
   const translationLength = visibleLength(translation);
   const trimmedTranslation = translation.trim();
+  const sourceHasEllipsis = ELLIPSIS_PATTERN.test(sourceText);
 
   if (!trimmedTranslation || isPunctuationOnly(trimmedTranslation)) {
+    return true;
+  }
+
+  if (!sourceHasEllipsis && ELLIPSIS_PATTERN.test(trimmedTranslation)) {
     return true;
   }
 
@@ -487,6 +585,21 @@ function isSuspiciousContextTranslation(sourceText: string, translation: string)
     if (sourceLength >= 14 && translationLength <= 10 && CHINESE_FRAGMENT_END_PATTERN.test(trimmedTranslation)) {
       return true;
     }
+  }
+
+  return false;
+}
+
+function isSuspiciousSingleTranslation(sourceText: string, translation: string): boolean {
+  const trimmedTranslation = translation.trim();
+  const sourceHasEllipsis = ELLIPSIS_PATTERN.test(sourceText);
+
+  if (!trimmedTranslation || isPunctuationOnly(trimmedTranslation)) {
+    return true;
+  }
+
+  if (!sourceHasEllipsis && ELLIPSIS_PATTERN.test(trimmedTranslation)) {
+    return true;
   }
 
   return false;
@@ -541,6 +654,57 @@ async function buildTranslationGuidance(
   }
 
   return { summary, glossary };
+}
+
+export async function restoreSourceCues(
+  cues: SubtitleCue[]
+): Promise<SubtitleCue[]> {
+  const config = getConfig();
+  if (!config.translationSourceRestore.enabled || cues.length === 0) {
+    return cues;
+  }
+
+  const client = getOpenAIClient();
+  const batchSize = Math.max(1, Math.min(config.translationContext.batchSize, 12));
+  const precedingLines = Math.max(0, Math.min(config.translationContext.precedingContextLines, 2));
+  const followingLines = Math.max(0, Math.min(config.translationContext.followingContextLines, 2));
+  const ranges = buildDynamicTranslationRanges(cues, batchSize, Math.max(600, Math.floor(config.translationContext.maxTokens * 1.5)));
+  const restoredTexts: Array<string | null> = new Array(cues.length).fill(null);
+
+  for (const range of ranges) {
+    const batch = buildContextBatch(cues, range.start, range.end, precedingLines, followingLines);
+    const prompt = buildSourceRestorePrompt(batch);
+
+    try {
+      const response = await client.chat.completions.create({
+        model: config.openai.model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: Math.max(300, Math.min(1200, config.translationContext.maxTokens)),
+      });
+
+      const content = response.choices[0]?.message?.content?.trim();
+      if (!content) {
+        throw new Error('Empty source restore response from OpenAI');
+      }
+
+      const parsed = parseSourceRestoreBatch(content, batch.current.length);
+      for (const item of parsed) {
+        restoredTexts[item.id] = item.restored;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[Translator] Source restore failed for range ${range.label}, keeping original text: ${message}`);
+      for (let index = range.start; index < range.end; index++) {
+        restoredTexts[index] = cues[index].text;
+      }
+    }
+  }
+
+  return cues.map((cue, index) => ({
+    ...cue,
+    text: restoredTexts[index] ?? cue.text,
+  }));
 }
 
 function buildContextBatch(
@@ -799,6 +963,26 @@ export async function translateText(
       throw new Error('Empty translation response from OpenAI');
     }
 
+    if (isSuspiciousSingleTranslation(text, translation)) {
+      const retryResponse = await client.chat.completions.create({
+        model: config.openai.model,
+        messages: [{ role: 'user', content: buildStrictTranslationPrompt(text, targetLanguage) }],
+        temperature: 0.1,
+        max_tokens: maxTokens,
+      });
+
+      const retriedTranslation = retryResponse.choices[0]?.message?.content?.trim();
+      if (!retriedTranslation) {
+        throw new Error('Empty strict translation response from OpenAI');
+      }
+
+      if (isSuspiciousSingleTranslation(text, retriedTranslation)) {
+        throw new Error('Suspicious translation persisted after strict retry');
+      }
+
+      return retriedTranslation;
+    }
+
     return translation;
   } catch (error) {
     if (error instanceof Error) {
@@ -879,18 +1063,21 @@ export async function translateToBilingual(
   concurrency: number = 2
 ): Promise<SubtitleCue[]> {
   const config = getConfig();
+  const sourceCues = config.translationSourceRestore.enabled
+    ? await restoreSourceCues(originalCues)
+    : originalCues;
   let translatedCues: SubtitleCue[];
 
   if (config.translationContext.enabled) {
     try {
-      translatedCues = await translateBatchWithContext(originalCues, targetLang);
+      translatedCues = await translateBatchWithContext(sourceCues, targetLang);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[Translator] Context-aware translation failed, falling back to per-line translation: ${message}`);
-      translatedCues = await translateBatch(originalCues, targetLang, concurrency);
+      translatedCues = await translateBatch(sourceCues, targetLang, concurrency);
     }
   } else {
-    translatedCues = await translateBatch(originalCues, targetLang, concurrency);
+    translatedCues = await translateBatch(sourceCues, targetLang, concurrency);
   }
 
   const bilingualCues: SubtitleCue[] = [];

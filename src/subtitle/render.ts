@@ -28,6 +28,50 @@ const MIN_REBALANCED_DURATION_MS = 700;
 const MAX_TRANSLATION_ONLY_LINES = 2;
 const MAX_TRANSLATION_ONLY_DURATION_MS = 7200;
 
+function getRenderCharWidth(char: string): number {
+  if (!char) {
+    return 0;
+  }
+
+  if (/\s/.test(char)) {
+    return 0.3;
+  }
+
+  if (CJK_CHAR_PATTERN.test(char)) {
+    return 1;
+  }
+
+  if (/[A-Z]/.test(char)) {
+    return 0.72;
+  }
+
+  if (/[a-z0-9]/.test(char)) {
+    return 0.62;
+  }
+
+  return 0.5;
+}
+
+function findIndexByRenderWidth(text: string, targetWidth: number): number {
+  if (!text) {
+    return 0;
+  }
+
+  let width = 0;
+  for (let index = 0; index < text.length; index++) {
+    width += getRenderCharWidth(text[index] ?? '');
+    if (width >= targetWidth) {
+      return index + 1;
+    }
+  }
+
+  return text.length;
+}
+
+function hasMixedCjkLatinText(text: string): boolean {
+  return CJK_CHAR_PATTERN.test(text) && /[A-Za-z]/.test(text);
+}
+
 function isCjkText(text: string): boolean {
   return CJK_PATTERN.test(text);
 }
@@ -189,8 +233,17 @@ function rebalanceCueTiming(left: SubtitleCue, right: SubtitleCue, leftText: str
 }
 
 function findCjkSplitIndex(text: string, limit: number): number {
-  const hardLimit = Math.min(text.length, Math.max(1, limit));
-  const minIndex = Math.max(1, Math.floor(limit * 0.55));
+  const useWidthEstimate = hasMixedCjkLatinText(text);
+  const hardLimit = Math.min(
+    text.length,
+    Math.max(1, useWidthEstimate ? findIndexByRenderWidth(text, limit) : limit)
+  );
+  const minIndex = Math.max(
+    1,
+    useWidthEstimate
+      ? findIndexByRenderWidth(text, Math.max(1, limit * 0.55))
+      : Math.floor(limit * 0.55)
+  );
 
   for (let index = hardLimit; index >= minIndex; index--) {
     const left = text.slice(0, index).trim();

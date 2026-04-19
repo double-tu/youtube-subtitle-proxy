@@ -35,6 +35,7 @@ const envSchema = z.object({
   TRANSLATION_CONTEXT_CONCURRENCY: z.string().default('2').transform(Number),
   TRANSLATION_CONTEXT_BATCH_RETRIES: z.string().default('0').transform(Number),
   TRANSLATION_CONTEXT_MAX_TOKENS: z.string().default('500').transform(Number),
+  TRANSLATION_SOURCE_RESTORE_ENABLED: z.string().default('true').transform((v) => v === 'true'),
 
   // Database
   DB_PATH: z.string().default('./data/subtitles.db'),
@@ -120,6 +121,10 @@ function loadEnv(): AppConfig {
       concurrency: env.TRANSLATION_CONTEXT_CONCURRENCY,
       batchRetries: env.TRANSLATION_CONTEXT_BATCH_RETRIES,
       maxTokens: env.TRANSLATION_CONTEXT_MAX_TOKENS,
+    },
+
+    translationSourceRestore: {
+      enabled: env.TRANSLATION_SOURCE_RESTORE_ENABLED,
     },
 
     database: {

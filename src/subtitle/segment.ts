@@ -5,10 +5,7 @@
  */
 import type { SubtitleCue } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
-import {
-  buildScrollingAsrTimeline,
-  type SubtitleAtom,
-} from './timeline.js';
+import { buildScrollingAsrRows } from './timeline.js';
 
 const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
 const REPEATED_CHEVRON_PATTERN = />>/g;
@@ -125,11 +122,19 @@ const PAUSE_WORDS = new Set([
   'while',
 ]);
 const STRONG_SENTENCE_END_PATTERN = /[.!?。！？…]$/;
+const SOFT_SENTENCE_END_PATTERN = /[,:;，、；：]$/;
 const COMPACT_CUE_MAX_GAP_MS = 1000;
 
 type TextStats = {
   isCjk: boolean;
   length: number;
+};
+
+type SemanticBounds = {
+  min: number;
+  preferred: number;
+  max: number;
+  overflow: number;
 };
 
 function normalizeCueText(text: string): string {
@@ -138,25 +143,6 @@ function normalizeCueText(text: string): string {
     .replace(REPEATED_CHEVRON_PATTERN, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function combineAtomTexts(atoms: SubtitleAtom[]): string {
-  let combined = '';
-
-  for (const atom of atoms) {
-    if (
-      combined
-      && !isCjkText(combined)
-      && !combined.endsWith(' ')
-      && !atom.text.startsWith(' ')
-    ) {
-      combined += ' ';
-    }
-
-    combined += atom.text;
-  }
-
-  return normalizeCueText(combined);
 }
 
 function isCjkText(text: string): boolean {
@@ -185,6 +171,38 @@ function getTargetBounds(isCjk: boolean) {
       };
 }
 
+function getSemanticBounds(isCjk: boolean): SemanticBounds {
+  const config = getConfig();
+
+  if (isCjk) {
+    const preferred = Math.max(
+      config.subtitle.sourceTargetMaxCjk + 4,
+      config.subtitle.renderMaxCharsCjk + 8,
+      24
+    );
+
+    return {
+      min: Math.max(config.subtitle.sourceTargetMinCjk, 10),
+      preferred,
+      max: Math.max(preferred + 8, config.subtitle.renderMaxCharsCjk + 12, 34),
+      overflow: 6,
+    };
+  }
+
+  const preferred = Math.max(
+    config.subtitle.sourceTargetMaxWords + 4,
+    config.subtitle.renderMaxWords + 8,
+    24
+  );
+
+  return {
+    min: Math.max(config.subtitle.sourceTargetMinWords, 10),
+    preferred,
+    max: Math.max(preferred + 10, config.subtitle.renderMaxWords + 18, 36),
+    overflow: 6,
+  };
+}
+
 function getBilingualLimit(text: string): number {
   const config = getConfig();
   const stats = getTextStats(text);
@@ -210,6 +228,11 @@ function isLikelyDanglingText(text: string): boolean {
     }
 
     return TRAILING_CONNECTOR_PATTERN.test(normalized);
+  }
+
+  const lastWord = getLastEnglishWord(normalized);
+  if (UNSAFE_TRAILING_WORDS.has(lastWord) || /-$/.test(lastWord)) {
+    return true;
   }
 
   return stats.length <= 3 && !STRONG_SENTENCE_END_PATTERN.test(normalized);
@@ -537,9 +560,49 @@ function improveSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
   return rebalanceSourceCues(expanded);
 }
 
-function improvePreservedSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
+function splitSemanticCue(cue: SubtitleCue): SubtitleCue[] {
+  const normalizedText = normalizeCueText(cue.text);
+  const stats = getTextStats(normalizedText);
+  const bounds = getSemanticBounds(stats.isCjk);
+
+  if (stats.length <= bounds.max) {
+    return [{ ...cue, text: normalizedText }];
+  }
+
+  const sentenceParts = splitSentenceParts(normalizedText);
+  if (sentenceParts.length > 1) {
+    return distributeMonolingualCueDuration({ ...cue, text: normalizedText }, sentenceParts);
+  }
+
+  if (!stats.isCjk) {
+    const hardLimit = bounds.max + bounds.overflow + 16;
+    if (stats.length <= hardLimit) {
+      return [{ ...cue, text: normalizedText }];
+    }
+  }
+
+  const parts = stats.isCjk
+    ? splitCjkCueByLength(normalizedText, bounds.preferred)
+    : splitEnglishCueByLength(normalizedText, bounds.max);
+
+  return distributeMonolingualCueDuration({ ...cue, text: normalizedText }, parts);
+}
+
+function shouldKeepSemanticBoundary(left: SubtitleCue, right: SubtitleCue): boolean {
+  const gap = right.startTime - left.endTime;
+  const leftText = left.text.trim();
+
+  return gap > 1400
+    || STRONG_SENTENCE_END_PATTERN.test(leftText)
+    || (SOFT_SENTENCE_END_PATTERN.test(leftText) && !isLikelyDanglingText(leftText))
+    || SYMBOL_START_PATTERN.test(right.text.trim());
+}
+
+function improveSemanticSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
   if (cues.length <= 1) {
-    return cues;
+    return cues
+      .map(cue => ({ ...cue, text: normalizeCueText(cue.text) }))
+      .filter(cue => cue.text);
   }
 
   const normalized = cues
@@ -549,31 +612,30 @@ function improvePreservedSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
     }))
     .filter(cue => cue.text);
 
-  const result: SubtitleCue[] = [];
+  const merged: SubtitleCue[] = [];
 
   for (let i = 0; i < normalized.length; i++) {
     let current = { ...normalized[i] };
 
     while (i + 1 < normalized.length) {
       const currentStats = getTextStats(current.text);
-      const shouldCompactCurrent = currentStats.isCjk
-        ? currentStats.length <= 4 || isLikelyDanglingText(current.text)
-        : currentStats.length <= 4 || isLikelyDanglingText(current.text);
-      if (!shouldCompactCurrent) {
-        break;
-      }
-
       const next = normalized[i + 1];
-      if (shouldKeepCompactBoundary(current, next)) {
+      const nextStats = getTextStats(next.text);
+      const bounds = getSemanticBounds(currentStats.isCjk);
+      const maxLength = bounds.max + bounds.overflow;
+      const targetLength = Math.min(
+        maxLength,
+        Math.max(bounds.min + (currentStats.isCjk ? 6 : 10), Math.floor(bounds.preferred * 0.6))
+      );
+
+      if (!isLikelyDanglingText(current.text) && currentStats.length >= targetLength) {
         break;
       }
 
-      const nextStats = getTextStats(next.text);
-      const allowOverflow = isLikelyDanglingText(current.text) || isLikelyDanglingText(next.text);
-      const bounds = getTargetBounds(currentStats.isCjk);
-      const maxLength = allowOverflow
-        ? bounds.max + (currentStats.isCjk ? 10 : 4)
-        : bounds.max;
+      if (shouldKeepSemanticBoundary(current, next)) {
+        break;
+      }
+
       if (currentStats.length + nextStats.length > maxLength) {
         break;
       }
@@ -582,147 +644,35 @@ function improvePreservedSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
       i++;
     }
 
-    result.push(current);
+    merged.push(current);
   }
 
-  for (let i = result.length - 1; i > 0; i--) {
-    const current = result[i];
+  for (let i = merged.length - 1; i > 0; i--) {
+    const current = merged[i];
     const currentStats = getTextStats(current.text);
-    const shouldCompactCurrent = currentStats.length <= 4 || isLikelyDanglingText(current.text);
-    if (!shouldCompactCurrent) {
-      continue;
-    }
-
-    const previous = result[i - 1];
-    if (shouldKeepCompactBoundary(previous, current)) {
-      continue;
-    }
-
+    const previous = merged[i - 1];
     const previousStats = getTextStats(previous.text);
-    const bounds = getTargetBounds(previousStats.isCjk);
-    const allowOverflow = isLikelyDanglingText(current.text) || currentStats.length <= 2;
-    const maxLength = allowOverflow
-      ? bounds.max + (previousStats.isCjk ? 10 : 4)
-      : bounds.max;
+    const bounds = getSemanticBounds(previousStats.isCjk);
+    const maxLength = bounds.max + bounds.overflow;
+    const currentNeedsMerge = isLikelyDanglingText(current.text) || currentStats.length < bounds.min;
+
+    if (!currentNeedsMerge) {
+      continue;
+    }
+
+    if (shouldKeepSemanticBoundary(previous, current)) {
+      continue;
+    }
 
     if (previousStats.length + currentStats.length > maxLength) {
       continue;
     }
 
-    result[i - 1] = mergeCuePair(previous, current);
-    result.splice(i, 1);
+    merged[i - 1] = mergeCuePair(previous, current);
+    merged.splice(i, 1);
   }
 
-  return result;
-}
-
-function buildCueFromAtoms(atoms: SubtitleAtom[]): SubtitleCue | null {
-  if (atoms.length === 0) {
-    return null;
-  }
-
-  const text = combineAtomTexts(atoms);
-  if (!text) {
-    return null;
-  }
-
-  return {
-    startTime: atoms[0].startTime,
-    endTime: atoms[atoms.length - 1].endTime,
-    text,
-  };
-}
-
-function shouldFlushAtomSegment(
-  atomBuffer: SubtitleAtom[],
-  nextAtom: SubtitleAtom | undefined,
-  preserveTiming: boolean
-): boolean {
-  if (atomBuffer.length === 0) {
-    return false;
-  }
-
-  const currentCue = buildCueFromAtoms(atomBuffer);
-  if (!currentCue) {
-    return true;
-  }
-
-  const currentText = currentCue.text;
-  const currentStats = getTextStats(currentText);
-  const bounds = getTargetBounds(currentStats.isCjk);
-  const duration = currentCue.endTime - currentCue.startTime;
-  const gap = nextAtom ? (nextAtom.startTime - atomBuffer[atomBuffer.length - 1].endTime) : Number.POSITIVE_INFINITY;
-  const reachedStrongBoundary = STRONG_SENTENCE_END_PATTERN.test(currentText);
-  const reachedSoftBoundary = currentStats.isCjk
-    ? /[，、；：。！？…]$/.test(currentText)
-    : /[,.;:!?]$/.test(currentText);
-
-  if (!nextAtom) {
-    return true;
-  }
-
-  if (gap > 1000) {
-    return true;
-  }
-
-  if (preserveTiming) {
-    if (reachedStrongBoundary) {
-      return true;
-    }
-
-    return currentStats.length >= bounds.max;
-  }
-
-  if (reachedStrongBoundary && duration >= 1800) {
-    return true;
-  }
-
-  if (
-    reachedSoftBoundary
-    && currentStats.length >= bounds.min
-    && duration >= 1500
-  ) {
-    return true;
-  }
-
-  return currentStats.length >= bounds.max;
-}
-
-function segmentAtoms(
-  atoms: SubtitleAtom[],
-  options?: {
-    preserveTiming?: boolean;
-  }
-): SubtitleCue[] {
-  if (atoms.length === 0) {
-    return [];
-  }
-
-  const result: SubtitleCue[] = [];
-  const atomBuffer: SubtitleAtom[] = [];
-
-  for (let i = 0; i < atoms.length; i++) {
-    const atom = atoms[i];
-    const nextAtom = atoms[i + 1];
-    atomBuffer.push(atom);
-
-    if (shouldFlushAtomSegment(atomBuffer, nextAtom, Boolean(options?.preserveTiming))) {
-      const cue = buildCueFromAtoms(atomBuffer);
-      if (cue) {
-        result.push(cue);
-      }
-      atomBuffer.length = 0;
-    }
-  }
-
-  if (atomBuffer.length > 0) {
-    const cue = buildCueFromAtoms(atomBuffer);
-    if (cue) {
-      result.push(cue);
-    }
-  }
-
-  return result;
+  return merged.flatMap(splitSemanticCue);
 }
 
 function distributeCueDuration(
@@ -859,19 +809,17 @@ export function buildSourceSegments(
   }
 ): SubtitleCue[] {
   const events = Array.isArray(originalJson.events) ? originalJson.events : [];
-  const atoms = buildScrollingAsrTimeline(events);
+  const scrollingRows = buildScrollingAsrRows(events);
 
-  if (atoms.length === 0) {
+  if (scrollingRows.length === 0) {
     const sourceCues = options?.preserveTiming
       ? compactShortCues(parsedCues)
       : mergeSubtitleCues(parsedCues);
     return optimizeSourceCues(sourceCues, options);
   }
 
-  const segmented = segmentAtoms(atoms, options);
-  return options?.preserveTiming
-    ? improvePreservedSourceCueQuality(segmented)
-    : improveSourceCueQuality(segmented);
+  const baselineRows = compactShortCues(scrollingRows);
+  return improveSemanticSourceCueQuality(baselineRows);
 }
 
 export function compactShortCues(cues: SubtitleCue[]): SubtitleCue[] {

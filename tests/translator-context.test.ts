@@ -77,6 +77,7 @@ describe('translator context batching', () => {
       });
 
     const { translateToBilingual } = await loadTranslator({
+      TRANSLATION_SOURCE_RESTORE_ENABLED: 'false',
       TRANSLATION_CONTEXT_ENABLED: 'true',
       TRANSLATION_CONTEXT_BATCH_SIZE: '2',
       TRANSLATION_CONTEXT_PRECEDING_LINES: '1',
@@ -126,6 +127,7 @@ describe('translator context batching', () => {
       .mockResolvedValueOnce({ choices: [{ message: { content: '单行回退翻译' } }] });
 
     const { translateToBilingual } = await loadTranslator({
+      TRANSLATION_SOURCE_RESTORE_ENABLED: 'false',
       TRANSLATION_CONTEXT_ENABLED: 'true',
       TRANSLATION_CONTEXT_BATCH_SIZE: '2',
       TRANSLATION_CONTEXT_PRECEDING_LINES: '0',
@@ -187,6 +189,7 @@ describe('translator context batching', () => {
       .mockResolvedValueOnce({ choices: [{ message: { content: 'FB3' } }] });
 
     const { translateToBilingual } = await loadTranslator({
+      TRANSLATION_SOURCE_RESTORE_ENABLED: 'false',
       TRANSLATION_CONTEXT_ENABLED: 'true',
       TRANSLATION_CONTEXT_BATCH_SIZE: '2',
       TRANSLATION_CONTEXT_PRECEDING_LINES: '0',
@@ -218,6 +221,7 @@ describe('translator context batching', () => {
 
   it('builds smaller dynamic context batches for long source lines', async () => {
     const { debugBuildDynamicTranslationRanges } = await loadTranslator({
+      TRANSLATION_SOURCE_RESTORE_ENABLED: 'false',
       TRANSLATION_CONTEXT_ENABLED: 'true',
       TRANSLATION_CONTEXT_BATCH_SIZE: '24',
       TRANSLATION_CONTEXT_MAX_TOKENS: '160',
@@ -249,5 +253,58 @@ describe('translator context batching', () => {
       { start: 0, end: 2, label: '1/2' },
       { start: 2, end: 3, label: '2/2' },
     ]);
+  });
+
+  it('restores source cues before context translation when enabled', async () => {
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '[{"id":0,"restored":"This is a restored first sentence."},{"id":1,"restored":"This is a restored second sentence."}]',
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: '[{"id":0,"translation":"这是恢复后的第一句。"},{"id":1,"translation":"这是恢复后的第二句。"}]',
+            },
+          },
+        ],
+      });
+
+    const { translateToBilingual } = await loadTranslator({
+      TRANSLATION_SOURCE_RESTORE_ENABLED: 'true',
+      TRANSLATION_CONTEXT_ENABLED: 'true',
+      TRANSLATION_CONTEXT_BATCH_SIZE: '2',
+      TRANSLATION_CONTEXT_PRECEDING_LINES: '0',
+      TRANSLATION_CONTEXT_FOLLOWING_LINES: '0',
+      TRANSLATION_CONTEXT_CONCURRENCY: '1',
+      TRANSLATION_SUMMARY_ENABLED: 'false',
+      TRANSLATION_GLOSSARY_ENABLED: 'false',
+    });
+
+    const cues = [
+      { startTime: 0, endTime: 1000, text: 'This is a broken first sentence from' },
+      { startTime: 1000, endTime: 2000, text: 'being a beginner and learning.' },
+    ];
+
+    const results = await translateToBilingual(cues, 'zh-CN', 2);
+
+    expect(results.map(cue => cue.text)).toEqual([
+      'This is a broken first sentence from\n这是恢复后的第一句。',
+      'being a beginner and learning.\n这是恢复后的第二句。',
+    ]);
+
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    const restorePrompt = mockCreate.mock.calls[0][0].messages[0].content as string;
+    expect(restorePrompt).toContain('reconstructing noisy ASR subtitle fragments');
+
+    const translatePrompt = mockCreate.mock.calls[1][0].messages[0].content as string;
+    expect(translatePrompt).toContain('This is a restored first sentence.');
+    expect(translatePrompt).toContain('This is a restored second sentence.');
   });
 });
