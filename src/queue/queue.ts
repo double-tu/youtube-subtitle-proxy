@@ -196,28 +196,33 @@ async function processTask(task: TranslationTask): Promise<void> {
 
   try {
     console.log(`[Queue] Processing task: ${id}`);
+    const config = getConfig();
 
     // Update status to translating
     await updateCaptionJobStatus(id, 'translating');
 
     // Parse original subtitles
     const originalCues = parseYouTubeTimedText(originalJson);
+    const preserveTiming = config.subtitle.outputMode === 'translation-only';
 
-    // Merge into paragraphs (3-7 seconds)
-    const paragraphs = mergeSubtitleCues(originalCues);
-    const optimizedSourceCues = optimizeSourceCues(paragraphs);
+    // Single-language output should preserve original cue timing as much as possible.
+    const sourceCues = preserveTiming
+      ? originalCues
+      : mergeSubtitleCues(originalCues);
+    const optimizedSourceCues = optimizeSourceCues(sourceCues, { preserveTiming });
 
     // Optimize timing
     const optimizedCues = optimizeSubtitleTiming(optimizedSourceCues);
 
     // Translate to bilingual
-    const config = getConfig();
     const translatedBilingualCues = await translateToBilingual(
       optimizedCues,
       params.tlang || 'zh-CN',
       config.queue.concurrency
     );
-    const bilingualCues = optimizeBilingualCues(translatedBilingualCues);
+    const bilingualCues = preserveTiming
+      ? translatedBilingualCues
+      : optimizeBilingualCues(translatedBilingualCues);
 
     // Render to WebVTT
     const webvtt = renderWebVTT(bilingualCues, {

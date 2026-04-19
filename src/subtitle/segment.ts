@@ -324,13 +324,22 @@ function splitBilingualCue(cue: SubtitleCue): SubtitleCue[] {
   return distributeCueDuration(cue.startTime, cue.endTime, parts);
 }
 
-export function optimizeSourceCues(cues: SubtitleCue[]): SubtitleCue[] {
+export function optimizeSourceCues(
+  cues: SubtitleCue[],
+  options?: {
+    preserveTiming?: boolean;
+  }
+): SubtitleCue[] {
   const normalized = cues
     .map(cue => ({
       ...cue,
       text: normalizeCueText(cue.text),
     }))
     .filter(cue => cue.text);
+
+  if (options?.preserveTiming) {
+    return normalized;
+  }
 
   return improveSourceCueQuality(normalized);
 }
