@@ -53,6 +53,7 @@ const PAUSE_WORDS = new Set([
   'well',
   'while',
 ]);
+const COMPACT_CUE_MAX_GAP_MS = 1000;
 
 type TextStats = {
   isCjk: boolean;
@@ -136,6 +137,16 @@ function mergeCuePair(left: SubtitleCue, right: SubtitleCue): SubtitleCue {
     endTime: right.endTime,
     text: combineCueTexts([left.text, right.text]),
   };
+}
+
+function shouldKeepCompactBoundary(left: SubtitleCue, right: SubtitleCue): boolean {
+  const gap = right.startTime - left.endTime;
+  const leftText = left.text.trim();
+  const rightText = right.text.trim();
+
+  return gap > COMPACT_CUE_MAX_GAP_MS
+    || STRONG_SENTENCE_END_PATTERN.test(leftText)
+    || SYMBOL_START_PATTERN.test(rightText);
 }
 
 function shouldKeepBoundary(left: SubtitleCue, right: SubtitleCue): boolean {
@@ -342,6 +353,53 @@ export function optimizeSourceCues(
   }
 
   return improveSourceCueQuality(normalized);
+}
+
+export function compactShortCues(cues: SubtitleCue[]): SubtitleCue[] {
+  if (cues.length <= 1) {
+    return cues;
+  }
+
+  const normalized = cues
+    .map(cue => ({
+      ...cue,
+      text: normalizeCueText(cue.text),
+    }))
+    .filter(cue => cue.text);
+
+  if (normalized.length <= 1) {
+    return normalized;
+  }
+
+  const result: SubtitleCue[] = [];
+
+  for (let i = 0; i < normalized.length; i++) {
+    let current = { ...normalized[i] };
+    const currentStats = getTextStats(current.text);
+    const bounds = getTargetBounds(currentStats.isCjk);
+    let currentLength = currentStats.length;
+
+    while (currentLength < bounds.min && i + 1 < normalized.length) {
+      const next = normalized[i + 1];
+      if (shouldKeepCompactBoundary(current, next)) {
+        break;
+      }
+
+      const nextStats = getTextStats(next.text);
+      const combinedLength = currentLength + nextStats.length;
+      if (combinedLength > bounds.max) {
+        break;
+      }
+
+      current = mergeCuePair(current, next);
+      currentLength = combinedLength;
+      i++;
+    }
+
+    result.push(current);
+  }
+
+  return result;
 }
 
 export function optimizeBilingualCues(cues: SubtitleCue[]): SubtitleCue[] {
@@ -634,6 +692,7 @@ export function deduplicateCues(cues: SubtitleCue[]): SubtitleCue[] {
 
 export default {
   mergeSubtitleCues,
+  compactShortCues,
   optimizeSourceCues,
   optimizeBilingualCues,
   splitLongParagraphs,

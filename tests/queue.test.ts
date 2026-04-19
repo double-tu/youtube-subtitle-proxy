@@ -5,6 +5,7 @@ const mockCreateCaptionJob = vi.fn();
 const mockUpdateCaptionJobStatus = vi.fn();
 const mockSetBilingualSubtitle = vi.fn();
 const mockIncrementJobRetry = vi.fn();
+const mockCompactShortCues = vi.fn((cues) => cues);
 const mockMergeSubtitleCues = vi.fn((cues) => cues);
 const mockOptimizeSourceCues = vi.fn((cues) => cues);
 const mockOptimizeSubtitleTiming = vi.fn((cues) => cues);
@@ -45,6 +46,7 @@ vi.mock('../src/subtitle/parse.js', () => ({
 }));
 
 vi.mock('../src/subtitle/segment.js', () => ({
+  compactShortCues: mockCompactShortCues,
   mergeSubtitleCues: mockMergeSubtitleCues,
   optimizeSourceCues: mockOptimizeSourceCues,
   optimizeSubtitleTiming: mockOptimizeSubtitleTiming,
@@ -79,6 +81,7 @@ beforeEach(() => {
   mockUpdateCaptionJobStatus.mockReset().mockResolvedValue(undefined);
   mockSetBilingualSubtitle.mockReset().mockResolvedValue(undefined);
   mockIncrementJobRetry.mockReset().mockResolvedValue(undefined);
+  mockCompactShortCues.mockClear();
   mockMergeSubtitleCues.mockClear();
   mockOptimizeSourceCues.mockClear();
   mockOptimizeSubtitleTiming.mockClear();
@@ -125,6 +128,7 @@ describe('translation queue', () => {
       expect.any(String),
       'translating'
     );
+    expect(mockCompactShortCues).toHaveBeenCalled();
     expect(mockMergeSubtitleCues).not.toHaveBeenCalled();
     expect(mockOptimizeBilingualCues).not.toHaveBeenCalled();
     expect(mockIncrementJobRetry).not.toHaveBeenCalled();

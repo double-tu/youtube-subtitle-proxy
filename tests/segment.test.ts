@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  compactShortCues,
   mergeSubtitleCues,
   optimizeBilingualCues,
   optimizeSourceCues,
@@ -105,6 +106,37 @@ describe('optimizeSourceCues', () => {
     expect(optimized.length).toBeGreaterThan(1);
     expect(optimized[0].text).toContain('This is the first complete sentence');
     expect(optimized[1].text).toContain('This is the second complete sentence');
+  });
+});
+
+describe('compactShortCues', () => {
+  it('merges very short neighboring cues for translation-only mode', () => {
+    const cues = [
+      { startTime: 0, endTime: 300, text: 'I' },
+      { startTime: 300, endTime: 600, text: 'really' },
+      { startTime: 600, endTime: 900, text: 'do' },
+      { startTime: 900, endTime: 1200, text: 'not' },
+      { startTime: 1200, endTime: 1500, text: 'know' },
+    ];
+
+    const compacted = compactShortCues(cues);
+
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0].text).toBe('I really do not know');
+  });
+
+  it('keeps strong sentence boundaries when compacting', () => {
+    const cues = [
+      { startTime: 0, endTime: 500, text: 'Stop.' },
+      { startTime: 500, endTime: 900, text: 'Now' },
+      { startTime: 900, endTime: 1200, text: 'go' },
+    ];
+
+    const compacted = compactShortCues(cues);
+
+    expect(compacted).toHaveLength(2);
+    expect(compacted[0].text).toBe('Stop.');
+    expect(compacted[1].text).toBe('Now go');
   });
 });
 
