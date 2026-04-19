@@ -6,7 +6,6 @@
 import type { SubtitleCue } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
 
-const STRONG_SENTENCE_END_PATTERN = /[.!?。！？…]$/;
 const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
 const REPEATED_CHEVRON_PATTERN = />>/g;
 const SYMBOL_START_PATTERN = /^[[(♪]/;
