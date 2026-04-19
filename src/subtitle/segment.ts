@@ -6,6 +6,341 @@
 import type { SubtitleCue } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
 
+const STRONG_SENTENCE_END_PATTERN = /[.!?。！？…]$/;
+const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
+const REPEATED_CHEVRON_PATTERN = />>/g;
+const SYMBOL_START_PATTERN = /^[[(♪]/;
+const PAUSE_WORDS = new Set([
+  'actually',
+  'also',
+  'although',
+  'and',
+  'anyway',
+  'as',
+  'basically',
+  'because',
+  'but',
+  'eventually',
+  'frankly',
+  'honestly',
+  'hopefully',
+  'however',
+  'if',
+  'instead',
+  'just',
+  'like',
+  'literally',
+  'maybe',
+  'meanwhile',
+  'nevertheless',
+  'nonetheless',
+  'now',
+  'okay',
+  'or',
+  'otherwise',
+  'perhaps',
+  'personally',
+  'probably',
+  'right',
+  'since',
+  'so',
+  'suddenly',
+  'then',
+  'therefore',
+  'though',
+  'thus',
+  'unless',
+  'until',
+  'well',
+  'while',
+]);
+
+type TextStats = {
+  isCjk: boolean;
+  length: number;
+};
+
+function normalizeCueText(text: string): string {
+  return text
+    .replace(SPEAKER_PREFIX_PATTERN, '')
+    .replace(REPEATED_CHEVRON_PATTERN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isCjkText(text: string): boolean {
+  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(text);
+}
+
+function getTextStats(text: string): TextStats {
+  const normalized = text.trim();
+  const isCjk = isCjkText(normalized);
+  return {
+    isCjk,
+    length: isCjk ? normalized.length : countWords(normalized),
+  };
+}
+
+function getTargetBounds(isCjk: boolean) {
+  const config = getConfig();
+  return isCjk
+    ? {
+        min: config.subtitle.sourceTargetMinCjk,
+        max: config.subtitle.sourceTargetMaxCjk,
+      }
+    : {
+        min: config.subtitle.sourceTargetMinWords,
+        max: config.subtitle.sourceTargetMaxWords,
+      };
+}
+
+function getBilingualLimit(text: string): number {
+  const config = getConfig();
+  const stats = getTextStats(text);
+  return stats.isCjk
+    ? config.subtitle.bilingualMaxCharsCjk
+    : config.subtitle.bilingualMaxWords;
+}
+
+function splitSentenceParts(text: string): string[] {
+  const normalized = normalizeCueText(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const isCjk = isCjkText(normalized);
+  const pattern = isCjk
+    ? /(?<=[。！？；：，、…])/
+    : /(?<=[,.;:!?])\s+/;
+
+  const parts = normalized
+    .split(pattern)
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts : [normalized];
+}
+
+function combineCueTexts(texts: string[]): string {
+  const cleaned = texts.map(normalizeCueText).filter(Boolean);
+  if (cleaned.length === 0) {
+    return '';
+  }
+
+  const hasCjk = cleaned.some(isCjkText);
+  return normalizeMergedText(cleaned.join(hasCjk ? '' : ' '));
+}
+
+function mergeCuePair(left: SubtitleCue, right: SubtitleCue): SubtitleCue {
+  return {
+    startTime: left.startTime,
+    endTime: right.endTime,
+    text: combineCueTexts([left.text, right.text]),
+  };
+}
+
+function shouldKeepBoundary(left: SubtitleCue, right: SubtitleCue): boolean {
+  const gap = right.startTime - left.endTime;
+  const rightText = right.text.trim();
+  const rightFirstWord = rightText.toLowerCase().split(/\s+/)[0] || '';
+
+  return gap > 1000
+    || SYMBOL_START_PATTERN.test(rightText)
+    || PAUSE_WORDS.has(rightFirstWord);
+}
+
+function splitCueAtNaturalBoundary(cue: SubtitleCue): SubtitleCue[] {
+  const parts = splitSentenceParts(cue.text);
+  if (parts.length <= 1) {
+    return [cue];
+  }
+
+  const totalWeight = parts.reduce((sum, part) => sum + Math.max(1, getTextStats(part).length), 0);
+  const totalDuration = cue.endTime - cue.startTime;
+  let cursor = cue.startTime;
+
+  return parts.map((part, index) => {
+    const weight = Math.max(1, getTextStats(part).length);
+    const duration = index === parts.length - 1
+      ? cue.endTime - cursor
+      : Math.max(400, Math.round((weight / totalWeight) * totalDuration));
+    const startTime = cursor;
+    const endTime = index === parts.length - 1
+      ? cue.endTime
+      : Math.min(cue.endTime, startTime + duration);
+
+    cursor = endTime;
+    return {
+      startTime,
+      endTime,
+      text: part,
+    };
+  }).filter(item => item.endTime > item.startTime);
+}
+
+function rebalanceSourceCues(cues: SubtitleCue[]): SubtitleCue[] {
+  if (cues.length <= 1) {
+    return cues;
+  }
+
+  const result: SubtitleCue[] = [];
+
+  for (let i = 0; i < cues.length; i++) {
+    let current = { ...cues[i] };
+    const currentStats = getTextStats(current.text);
+    const bounds = getTargetBounds(currentStats.isCjk);
+    let currentLength = currentStats.length;
+
+    while (currentLength < bounds.min && i + 1 < cues.length) {
+      const next = cues[i + 1];
+      if (shouldKeepBoundary(current, next)) {
+        break;
+      }
+
+      const nextStats = getTextStats(next.text);
+      const combinedLength = currentLength + nextStats.length;
+      if (combinedLength > bounds.max) {
+        break;
+      }
+
+      current = mergeCuePair(current, next);
+      currentLength = combinedLength;
+      i++;
+    }
+
+    result.push(current);
+  }
+
+  return result;
+}
+
+function improveSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
+  const expanded = cues.flatMap(cue => splitCueAtNaturalBoundary(cue));
+  return rebalanceSourceCues(expanded);
+}
+
+function distributeCueDuration(
+  startTime: number,
+  endTime: number,
+  parts: Array<{ original: string; translation: string }>
+): SubtitleCue[] {
+  const totalDuration = endTime - startTime;
+  const totalWeight = parts.reduce((sum, part) => {
+    return sum + Math.max(
+      1,
+      getTextStats(part.original).length + getTextStats(part.translation).length
+    );
+  }, 0);
+
+  let cursor = startTime;
+
+  return parts.map((part, index) => {
+    const weight = Math.max(
+      1,
+      getTextStats(part.original).length + getTextStats(part.translation).length
+    );
+    const duration = index === parts.length - 1
+      ? endTime - cursor
+      : Math.max(500, Math.round((weight / totalWeight) * totalDuration));
+    const nextEnd = index === parts.length - 1 ? endTime : Math.min(endTime, cursor + duration);
+    const cue: SubtitleCue = {
+      startTime: cursor,
+      endTime: nextEnd,
+      text: `${part.original}\n${part.translation}`,
+    };
+    cursor = nextEnd;
+    return cue;
+  }).filter(cue => cue.endTime > cue.startTime);
+}
+
+function splitBilingualParts(original: string, translation: string): Array<{ original: string; translation: string }> {
+  const originalParts = splitSentenceParts(original);
+  const translationParts = splitSentenceParts(translation);
+  const targetCount = Math.max(originalParts.length, translationParts.length);
+
+  if (targetCount <= 1) {
+    return [{ original: normalizeCueText(original), translation: normalizeCueText(translation) }];
+  }
+
+  const normalizePartsToCount = (parts: string[], count: number) => {
+    if (parts.length === count) {
+      return parts;
+    }
+
+    if (parts.length > count) {
+      const grouped: string[] = [];
+      const chunkSize = Math.ceil(parts.length / count);
+      for (let i = 0; i < parts.length; i += chunkSize) {
+        grouped.push(combineCueTexts(parts.slice(i, i + chunkSize)));
+      }
+      while (grouped.length < count) {
+        grouped.push('');
+      }
+      return grouped.slice(0, count);
+    }
+
+    const padded = [...parts];
+    while (padded.length < count) {
+      padded.push('');
+    }
+    return padded;
+  };
+
+  const alignedOriginal = normalizePartsToCount(originalParts, targetCount);
+  const alignedTranslation = normalizePartsToCount(translationParts, targetCount);
+
+  return Array.from({ length: targetCount }, (_, index) => ({
+    original: alignedOriginal[index] || '',
+    translation: alignedTranslation[index] || '',
+  })).filter(part => part.original || part.translation);
+}
+
+function needsBilingualSplit(original: string, translation: string): boolean {
+  return getTextStats(original).length > getBilingualLimit(original)
+    || getTextStats(translation).length > getBilingualLimit(translation);
+}
+
+function splitBilingualCue(cue: SubtitleCue): SubtitleCue[] {
+  const [originalLine = '', ...translationLines] = cue.text.split(/\r?\n/);
+  const translationLine = translationLines.join(' ').trim();
+  if (!translationLine) {
+    return [cue];
+  }
+
+  if (!needsBilingualSplit(originalLine, translationLine)) {
+    return [cue];
+  }
+
+  const config = getConfig();
+  const duration = cue.endTime - cue.startTime;
+  if (duration < config.subtitle.bilingualMinDurationMs * 2) {
+    return [cue];
+  }
+
+  const parts = splitBilingualParts(originalLine, translationLine);
+  if (parts.length <= 1) {
+    return [cue];
+  }
+
+  return distributeCueDuration(cue.startTime, cue.endTime, parts);
+}
+
+export function optimizeSourceCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const normalized = cues
+    .map(cue => ({
+      ...cue,
+      text: normalizeCueText(cue.text),
+    }))
+    .filter(cue => cue.text);
+
+  return improveSourceCueQuality(normalized);
+}
+
+export function optimizeBilingualCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const result = cues.flatMap(cue => splitBilingualCue(cue));
+  return optimizeSubtitleTiming(result);
+}
+
 /**
  * Merge subtitle cues into paragraphs based on time gaps
  */
@@ -291,6 +626,8 @@ export function deduplicateCues(cues: SubtitleCue[]): SubtitleCue[] {
 
 export default {
   mergeSubtitleCues,
+  optimizeSourceCues,
+  optimizeBilingualCues,
   splitLongParagraphs,
   optimizeSubtitleTiming,
   deduplicateCues,

@@ -1,5 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { mergeSubtitleCues } from '../src/subtitle/segment.js';
+import {
+  mergeSubtitleCues,
+  optimizeBilingualCues,
+  optimizeSourceCues,
+} from '../src/subtitle/segment.js';
 
 beforeAll(() => {
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-key';
@@ -69,5 +73,55 @@ describe('mergeSubtitleCues', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0].text).toBe('one two three');
     expect(merged[1].text).toBe('four five six');
+  });
+});
+
+describe('optimizeSourceCues', () => {
+  it('rebalances short english cues into a more readable target range', () => {
+    const cues = [
+      { startTime: 0, endTime: 500, text: 'I agree.' },
+      { startTime: 500, endTime: 1000, text: 'It is true.' },
+      { startTime: 1000, endTime: 1500, text: 'We can do this.' },
+      { startTime: 1500, endTime: 2000, text: 'Lets ship now.' },
+    ];
+
+    const optimized = optimizeSourceCues(cues);
+
+    expect(optimized).toHaveLength(1);
+    expect(optimized[0].text).toBe('I agree. It is true. We can do this. Lets ship now.');
+  });
+
+  it('splits long source cues at natural boundaries before translation', () => {
+    const cues = [
+      {
+        startTime: 0,
+        endTime: 4000,
+        text: 'This is the first complete sentence, and it ends here. This is the second complete sentence, and it also ends here.',
+      },
+    ];
+
+    const optimized = optimizeSourceCues(cues);
+
+    expect(optimized.length).toBeGreaterThan(1);
+    expect(optimized[0].text).toContain('This is the first complete sentence');
+    expect(optimized[1].text).toContain('This is the second complete sentence');
+  });
+});
+
+describe('optimizeBilingualCues', () => {
+  it('splits oversized bilingual cues into multiple timed cues', () => {
+    const cues = [
+      {
+        startTime: 0,
+        endTime: 6000,
+        text: 'This is the first complete sentence, and it ends here. This is the second complete sentence, and it also ends here.\n这是第一句完整的话，到这里结束。这是第二句完整的话，也在这里结束。',
+      },
+    ];
+
+    const optimized = optimizeBilingualCues(cues);
+
+    expect(optimized.length).toBeGreaterThan(1);
+    expect(optimized[0].endTime).toBeLessThanOrEqual(optimized[1].startTime);
+    expect(optimized[0].text).toContain('\n');
   });
 });

@@ -59,6 +59,15 @@ const envSchema = z.object({
   SEGMENT_MAX_CHARS: z.string().default('160').transform(Number),
   SEGMENT_MAX_WORDS: z.string().default('30').transform(Number),
   SRV3_OVERLAP_GAP_MS: z.string().default('100').transform(Number),
+  SUBTITLE_SOURCE_TARGET_MIN_CJK: z.string().default('15').transform(Number),
+  SUBTITLE_SOURCE_TARGET_MAX_CJK: z.string().default('25').transform(Number),
+  SUBTITLE_SOURCE_TARGET_MIN_WORDS: z.string().default('11').transform(Number),
+  SUBTITLE_SOURCE_TARGET_MAX_WORDS: z.string().default('20').transform(Number),
+  SUBTITLE_BILINGUAL_MAX_CHARS_CJK: z.string().default('22').transform(Number),
+  SUBTITLE_BILINGUAL_MAX_WORDS: z.string().default('14').transform(Number),
+  SUBTITLE_BILINGUAL_MIN_DURATION_MS: z.string().default('1200').transform(Number),
+  SUBTITLE_RENDER_MAX_CHARS_CJK: z.string().default('20').transform(Number),
+  SUBTITLE_RENDER_MAX_WORDS: z.string().default('12').transform(Number),
 
   // Admin (optional)
   ADMIN_TOKEN: z.string().optional(),
@@ -140,6 +149,15 @@ function loadEnv(): AppConfig {
       srv3OverlapGapMs: env.SRV3_OVERLAP_GAP_MS,
       segmentMaxChars: env.SEGMENT_MAX_CHARS,
       segmentMaxWords: env.SEGMENT_MAX_WORDS,
+      sourceTargetMinCjk: env.SUBTITLE_SOURCE_TARGET_MIN_CJK,
+      sourceTargetMaxCjk: env.SUBTITLE_SOURCE_TARGET_MAX_CJK,
+      sourceTargetMinWords: env.SUBTITLE_SOURCE_TARGET_MIN_WORDS,
+      sourceTargetMaxWords: env.SUBTITLE_SOURCE_TARGET_MAX_WORDS,
+      bilingualMaxCharsCjk: env.SUBTITLE_BILINGUAL_MAX_CHARS_CJK,
+      bilingualMaxWords: env.SUBTITLE_BILINGUAL_MAX_WORDS,
+      bilingualMinDurationMs: env.SUBTITLE_BILINGUAL_MIN_DURATION_MS,
+      renderMaxCharsCjk: env.SUBTITLE_RENDER_MAX_CHARS_CJK,
+      renderMaxWords: env.SUBTITLE_RENDER_MAX_WORDS,
     },
 
     admin: {

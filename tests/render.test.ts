@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { parseYouTubeSrv3 } from '../src/subtitle/parse.js';
-import { renderYouTubeSrv3, renderYouTubeTimedText } from '../src/subtitle/render.js';
+import {
+  prepareCuesForRender,
+  renderYouTubeSrv3,
+  renderYouTubeTimedText,
+} from '../src/subtitle/render.js';
 import type { SubtitleCue } from '../src/types/subtitle.js';
 
 describe('renderYouTubeSrv3', () => {
@@ -36,5 +40,35 @@ describe('renderYouTubeTimedText', () => {
     expect(initEvent.wsWinStyleId).toBe(1);
     expect(initEvent.dDurationMs).toBeGreaterThanOrEqual(6200);
     expect(timedText.events[1].wWinId).toBe(1);
+  });
+});
+
+describe('prepareCuesForRender', () => {
+  it('keeps srv3 cues to two stable lines', () => {
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 4000,
+        text: 'This is a long original subtitle line that should be normalized for srv3 output\n这是一条很长的译文字幕，需要在 srv3 输出时保持稳定',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'srv3');
+
+    expect(prepared[0].text.split('\n')).toHaveLength(2);
+  });
+
+  it('allows json3 cues to preserve controlled multiline output', () => {
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 4000,
+        text: 'This is a long original subtitle line that should be normalized for json3 output\n这是一条很长的译文字幕，需要在 json3 输出时进行受控换行',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared[0].text.split('\n').length).toBeGreaterThan(2);
   });
 });

@@ -20,6 +20,13 @@ vi.mock('../src/config/env.js', () => ({
       srv3OverlapGapMs: 100,
       segmentMaxChars: 160,
       segmentMaxWords: 30,
+      sourceTargetMinCjk: 15,
+      sourceTargetMaxCjk: 25,
+      sourceTargetMinWords: 11,
+      sourceTargetMaxWords: 20,
+      bilingualMaxCharsCjk: 22,
+      bilingualMaxWords: 14,
+      bilingualMinDurationMs: 1200,
     },
   }),
 }));
@@ -32,7 +39,9 @@ vi.mock('../src/subtitle/parse.js', () => ({
 
 vi.mock('../src/subtitle/segment.js', () => ({
   mergeSubtitleCues: vi.fn((cues) => cues),
+  optimizeSourceCues: vi.fn((cues) => cues),
   optimizeSubtitleTiming: vi.fn((cues) => cues),
+  optimizeBilingualCues: vi.fn((cues) => cues),
 }));
 
 vi.mock('../src/subtitle/render.js', () => ({

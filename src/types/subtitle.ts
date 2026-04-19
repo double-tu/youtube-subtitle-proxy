@@ -12,6 +12,8 @@ export interface SubtitleCue {
   text: string;
 }
 
+export type SubtitleRenderFormat = 'vtt' | 'json3' | 'srv3';
+
 export interface YouTubeTimedTextEvent {
   tStartMs: number;
   dDurationMs: number;
@@ -179,6 +181,15 @@ export interface AppConfig {
     srv3OverlapGapMs: number;
     segmentMaxChars: number;
     segmentMaxWords: number;
+    sourceTargetMinCjk: number;
+    sourceTargetMaxCjk: number;
+    sourceTargetMinWords: number;
+    sourceTargetMaxWords: number;
+    bilingualMaxCharsCjk: number;
+    bilingualMaxWords: number;
+    bilingualMinDurationMs: number;
+    renderMaxCharsCjk: number;
+    renderMaxWords: number;
   };
 
   admin: {

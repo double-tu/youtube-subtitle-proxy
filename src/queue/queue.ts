@@ -6,7 +6,12 @@
 import { randomUUID } from 'crypto';
 import { getConfig } from '../config/env.js';
 import { parseYouTubeTimedText } from '../subtitle/parse.js';
-import { mergeSubtitleCues, optimizeSubtitleTiming } from '../subtitle/segment.js';
+import {
+  mergeSubtitleCues,
+  optimizeBilingualCues,
+  optimizeSourceCues,
+  optimizeSubtitleTiming,
+} from '../subtitle/segment.js';
 import { renderWebVTT } from '../subtitle/render.js';
 import { translateToBilingual } from '../services/translator.js';
 import {
@@ -200,17 +205,19 @@ async function processTask(task: TranslationTask): Promise<void> {
 
     // Merge into paragraphs (3-7 seconds)
     const paragraphs = mergeSubtitleCues(originalCues);
+    const optimizedSourceCues = optimizeSourceCues(paragraphs);
 
     // Optimize timing
-    const optimizedCues = optimizeSubtitleTiming(paragraphs);
+    const optimizedCues = optimizeSubtitleTiming(optimizedSourceCues);
 
     // Translate to bilingual
     const config = getConfig();
-    const bilingualCues = await translateToBilingual(
+    const translatedBilingualCues = await translateToBilingual(
       optimizedCues,
       params.tlang || 'zh-CN',
       config.queue.concurrency
     );
+    const bilingualCues = optimizeBilingualCues(translatedBilingualCues);
 
     // Render to WebVTT
     const webvtt = renderWebVTT(bilingualCues, {
