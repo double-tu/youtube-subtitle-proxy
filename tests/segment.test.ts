@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { parseYouTubeTimedText } from '../src/subtitle/parse.js';
 import {
   compactShortCues,
   mergeSubtitleCues,
@@ -8,6 +9,54 @@ import {
 
 beforeAll(() => {
   process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-key';
+});
+
+describe('parseYouTubeTimedText', () => {
+  it('reconstructs scrolling ASR events into complete cues before translation', () => {
+    const cues = parseYouTubeTimedText({
+      events: [
+        {
+          tStartMs: 0,
+          dDurationMs: 3000,
+          wWinId: 1,
+          segs: [
+            { utf8: 'Hello' },
+            { utf8: ' world', tOffsetMs: 300 },
+            { utf8: '.', tOffsetMs: 600 },
+          ],
+        },
+        {
+          tStartMs: 3000,
+          dDurationMs: 10,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+        {
+          tStartMs: 3010,
+          dDurationMs: 3000,
+          wWinId: 1,
+          segs: [
+            { utf8: 'Next' },
+            { utf8: ' sentence', tOffsetMs: 300 },
+          ],
+        },
+        {
+          tStartMs: 6010,
+          dDurationMs: 10,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+      ],
+    });
+
+    expect(cues).toHaveLength(2);
+    expect(cues[0].text).toBe('Hello world.');
+    expect(cues[0].startTime).toBe(0);
+    expect(cues[0].endTime).toBe(3010);
+    expect(cues[1].text).toBe('Next sentence');
+  });
 });
 
 describe('mergeSubtitleCues', () => {

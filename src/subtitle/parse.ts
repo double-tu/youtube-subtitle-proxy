@@ -3,7 +3,174 @@
  *
  * Parses YouTube timedtext JSON format
  */
-import type { YouTubeTimedTextResponse, SubtitleCue } from '../types/subtitle.js';
+import type { YouTubeTimedTextEvent, YouTubeTimedTextResponse, SubtitleCue } from '../types/subtitle.js';
+
+const SENTENCE_END_PATTERN = /[,.;!?，。！？；…]$/;
+const ESTIMATED_SEG_DURATION_MS = 200;
+const MAX_SCROLLING_ASR_CJK_CHARS = 30;
+const MAX_SCROLLING_ASR_WORDS = 15;
+const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const WHITESPACE_PATTERN = /\s+/g;
+
+function isScrollingAsrEventStream(events: YouTubeTimedTextEvent[]): boolean {
+  return events.some(event => event.wWinId !== undefined && event.aAppend === 1);
+}
+
+function isCjkText(text: string): boolean {
+  return CJK_PATTERN.test(text);
+}
+
+function normalizeText(text: string): string {
+  return text
+    .replace(WHITESPACE_PATTERN, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\s+([，。！？；：])/g, '$1')
+    .trim();
+}
+
+function getTextLength(text: string): number {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return 0;
+  }
+
+  return isCjkText(normalized)
+    ? normalized.length
+    : normalized.split(/\s+/).filter(Boolean).length;
+}
+
+function getMaxScrollingAsrLength(text: string): number {
+  return isCjkText(text) ? MAX_SCROLLING_ASR_CJK_CHARS : MAX_SCROLLING_ASR_WORDS;
+}
+
+function pushCue(cues: SubtitleCue[], cue: SubtitleCue): void {
+  const previous = cues.at(-1);
+  if (previous && previous.endTime > cue.startTime) {
+    previous.endTime = cue.startTime;
+  }
+
+  cues.push(cue);
+}
+
+function flushScrollingCue(
+  cues: SubtitleCue[],
+  currentText: string,
+  currentStart: number,
+  currentEnd: number
+): boolean {
+  const text = normalizeText(currentText);
+  if (!text) {
+    return false;
+  }
+
+  pushCue(cues, {
+    startTime: currentStart,
+    endTime: currentEnd,
+    text,
+  });
+  return true;
+}
+
+function parseScrollingAsrTimedText(events: YouTubeTimedTextEvent[]): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  let currentText = '';
+  let currentStart = 0;
+  let currentEnd = 0;
+  let isFirstSegment = true;
+  let pendingSplit = false;
+
+  for (const event of events) {
+    if (event.aAppend === 1) {
+      if (currentText) {
+        currentEnd = event.tStartMs + (event.dDurationMs || 0);
+        if (pendingSplit) {
+          flushScrollingCue(cues, currentText, currentStart, currentEnd);
+          currentText = '';
+          currentEnd = 0;
+          isFirstSegment = true;
+          pendingSplit = false;
+        }
+      }
+      continue;
+    }
+
+    if (!event.segs || event.segs.length === 0) {
+      continue;
+    }
+
+    if (pendingSplit && currentText) {
+      flushScrollingCue(cues, currentText, currentStart, currentEnd);
+      currentText = '';
+      currentEnd = 0;
+      isFirstSegment = true;
+      pendingSplit = false;
+    }
+
+    for (let i = 0; i < event.segs.length; i++) {
+      const segment = event.segs[i];
+      const text = segment.utf8 || '';
+      const trimmed = text.trim();
+      const segStart = event.tStartMs + (segment.tOffsetMs || 0);
+
+      if (pendingSplit && currentText) {
+        flushScrollingCue(cues, currentText, currentStart, currentEnd);
+        currentText = '';
+        currentEnd = 0;
+        isFirstSegment = true;
+        pendingSplit = false;
+      }
+
+      if (!trimmed) {
+        continue;
+      }
+
+      if (isFirstSegment) {
+        currentStart = segStart;
+        isFirstSegment = false;
+      }
+
+      if (currentText && !isCjkText(currentText) && !currentText.endsWith(' ') && !text.startsWith(' ')) {
+        currentText += ' ';
+      }
+
+      currentText += text;
+      currentEnd = segStart + ESTIMATED_SEG_DURATION_MS;
+
+      const mergedText = normalizeText(currentText);
+      const reachedSentenceEnd = SENTENCE_END_PATTERN.test(trimmed);
+      const reachedMaxLength = getTextLength(mergedText) >= getMaxScrollingAsrLength(mergedText);
+      if (reachedSentenceEnd || reachedMaxLength) {
+        pendingSplit = true;
+      }
+    }
+  }
+
+  flushScrollingCue(cues, currentText, currentStart, currentEnd);
+  return cues;
+}
+
+function parseStandardTimedText(events: YouTubeTimedTextEvent[]): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+
+  for (const event of events) {
+    if (!event.segs || event.segs.length === 0) {
+      continue;
+    }
+
+    const text = normalizeText(event.segs.map(seg => seg.utf8).join(''));
+    if (!text) {
+      continue;
+    }
+
+    cues.push({
+      startTime: event.tStartMs,
+      endTime: event.tStartMs + event.dDurationMs,
+      text,
+    });
+  }
+
+  return cues;
+}
 
 /**
  * Parse YouTube timedtext JSON to subtitle cues
@@ -13,35 +180,9 @@ export function parseYouTubeTimedText(json: YouTubeTimedTextResponse): SubtitleC
     throw new Error('Invalid timedtext JSON: missing events array');
   }
 
-  const cues: SubtitleCue[] = [];
-
-  for (const event of json.events) {
-    // Skip events without segments
-    if (!event.segs || event.segs.length === 0) {
-      continue;
-    }
-
-    // Merge all segments into a single text
-    const text = event.segs
-      .map(seg => seg.utf8)
-      .join('')
-      .trim();
-
-    // Skip empty text
-    if (!text) {
-      continue;
-    }
-
-    const cue: SubtitleCue = {
-      startTime: event.tStartMs,
-      endTime: event.tStartMs + event.dDurationMs,
-      text: text,
-    };
-
-    cues.push(cue);
-  }
-
-  return cues;
+  return isScrollingAsrEventStream(json.events)
+    ? parseScrollingAsrTimedText(json.events)
+    : parseStandardTimedText(json.events);
 }
 
 /**

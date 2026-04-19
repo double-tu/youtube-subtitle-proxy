@@ -25,6 +25,7 @@ export interface YouTubeTimedTextEvent {
   id?: number;
   segs?: Array<{
     utf8: string;
+    tOffsetMs?: number;
     acAsrConf?: number;
   }>;
 }
