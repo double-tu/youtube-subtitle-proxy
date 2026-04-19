@@ -396,10 +396,89 @@ describe('buildSourceSegments', () => {
     const parsed = parseYouTubeTimedText(originalJson);
     const sourceSegments = buildSourceSegments(originalJson, parsed, { preserveTiming: true });
 
-    expect(sourceSegments.length).toBeGreaterThanOrEqual(1);
-    expect(sourceSegments[0].text).toContain("hi Traders if you're new to this channel");
-    expect(sourceSegments[0].text).toContain('my name is Shea AKA humble Trader');
+    expect(sourceSegments).toHaveLength(1);
+    expect(sourceSegments[0].text).toBe(
+      "hi Traders if you're new to this channel my name is Shea AKA humble Trader welcome to the ultimate day trading"
+    );
     expect(sourceSegments[0].text.includes('channelmy')).toBe(false);
+  });
+
+  it('uses semantic translation units instead of raw scrolling rows in preserveTiming mode', () => {
+    const originalJson = {
+      events: [
+        {
+          tStartMs: 0,
+          dDurationMs: 5220,
+          wWinId: 1,
+          segs: [
+            { utf8: 'hi' },
+            { utf8: ' Traders', tOffsetMs: 480 },
+            { utf8: ' if', tOffsetMs: 960 },
+            { utf8: " you're", tOffsetMs: 1380 },
+            { utf8: ' new', tOffsetMs: 1500 },
+            { utf8: ' to', tOffsetMs: 1740 },
+            { utf8: ' this', tOffsetMs: 1979 },
+            { utf8: ' channel', tOffsetMs: 2159 },
+          ],
+        },
+        {
+          tStartMs: 2330,
+          dDurationMs: 2890,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+        {
+          tStartMs: 2340,
+          dDurationMs: 5340,
+          wWinId: 1,
+          segs: [
+            { utf8: 'my' },
+            { utf8: ' name', tOffsetMs: 660 },
+            { utf8: ' is', tOffsetMs: 780 },
+            { utf8: ' Shea', tOffsetMs: 839 },
+            { utf8: ' AKA', tOffsetMs: 1319 },
+            { utf8: ' humble', tOffsetMs: 1919 },
+            { utf8: ' Trader', tOffsetMs: 2400 },
+          ],
+        },
+        {
+          tStartMs: 5210,
+          dDurationMs: 2470,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+        {
+          tStartMs: 5220,
+          dDurationMs: 4919,
+          wWinId: 1,
+          segs: [
+            { utf8: 'welcome' },
+            { utf8: ' to', tOffsetMs: 599 },
+            { utf8: ' the', tOffsetMs: 960 },
+            { utf8: ' ultimate', tOffsetMs: 1200 },
+            { utf8: ' day', tOffsetMs: 1679 },
+            { utf8: ' trading', tOffsetMs: 1920 },
+          ],
+        },
+        {
+          tStartMs: 7670,
+          dDurationMs: 2469,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+      ],
+    };
+
+    const parsed = parseYouTubeTimedText(originalJson);
+    const sourceSegments = buildSourceSegments(originalJson, parsed, { preserveTiming: true });
+
+    expect(sourceSegments).toHaveLength(1);
+    expect(sourceSegments[0].text).toBe(
+      "hi Traders if you're new to this channel my name is Shea AKA humble Trader welcome to the ultimate day trading"
+    );
   });
 });
 

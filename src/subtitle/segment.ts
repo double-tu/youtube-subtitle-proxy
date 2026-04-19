@@ -5,7 +5,10 @@
  */
 import type { SubtitleCue } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
-import { buildScrollingAsrTimeline, type SubtitleAtom } from './timeline.js';
+import {
+  buildScrollingAsrTimeline,
+  type SubtitleAtom,
+} from './timeline.js';
 
 const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
 const REPEATED_CHEVRON_PATTERN = />>/g;
@@ -546,8 +549,71 @@ function improvePreservedSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
     }))
     .filter(cue => cue.text);
 
-  const compacted = compactShortCues(normalized);
-  return rebalanceSourceCues(compacted);
+  const result: SubtitleCue[] = [];
+
+  for (let i = 0; i < normalized.length; i++) {
+    let current = { ...normalized[i] };
+
+    while (i + 1 < normalized.length) {
+      const currentStats = getTextStats(current.text);
+      const shouldCompactCurrent = currentStats.isCjk
+        ? currentStats.length <= 4 || isLikelyDanglingText(current.text)
+        : currentStats.length <= 4 || isLikelyDanglingText(current.text);
+      if (!shouldCompactCurrent) {
+        break;
+      }
+
+      const next = normalized[i + 1];
+      if (shouldKeepCompactBoundary(current, next)) {
+        break;
+      }
+
+      const nextStats = getTextStats(next.text);
+      const allowOverflow = isLikelyDanglingText(current.text) || isLikelyDanglingText(next.text);
+      const bounds = getTargetBounds(currentStats.isCjk);
+      const maxLength = allowOverflow
+        ? bounds.max + (currentStats.isCjk ? 10 : 4)
+        : bounds.max;
+      if (currentStats.length + nextStats.length > maxLength) {
+        break;
+      }
+
+      current = mergeCuePair(current, next);
+      i++;
+    }
+
+    result.push(current);
+  }
+
+  for (let i = result.length - 1; i > 0; i--) {
+    const current = result[i];
+    const currentStats = getTextStats(current.text);
+    const shouldCompactCurrent = currentStats.length <= 4 || isLikelyDanglingText(current.text);
+    if (!shouldCompactCurrent) {
+      continue;
+    }
+
+    const previous = result[i - 1];
+    if (shouldKeepCompactBoundary(previous, current)) {
+      continue;
+    }
+
+    const previousStats = getTextStats(previous.text);
+    const bounds = getTargetBounds(previousStats.isCjk);
+    const allowOverflow = isLikelyDanglingText(current.text) || currentStats.length <= 2;
+    const maxLength = allowOverflow
+      ? bounds.max + (previousStats.isCjk ? 10 : 4)
+      : bounds.max;
+
+    if (previousStats.length + currentStats.length > maxLength) {
+      continue;
+    }
+
+    result[i - 1] = mergeCuePair(previous, current);
+    result.splice(i, 1);
+  }
+
+  return result;
 }
 
 function buildCueFromAtoms(atoms: SubtitleAtom[]): SubtitleCue | null {
@@ -1134,6 +1200,10 @@ export function optimizeSubtitleTiming(cues: SubtitleCue[]): SubtitleCue[] {
     const minDisplayTime = 1000;
     let endTime = cue.endTime;
 
+    if (nextCue && endTime > nextCue.startTime - 100) {
+      endTime = nextCue.startTime - 100;
+    }
+
     if (endTime - cue.startTime < minDisplayTime) {
       endTime = cue.startTime + minDisplayTime;
 
@@ -1145,11 +1215,13 @@ export function optimizeSubtitleTiming(cues: SubtitleCue[]): SubtitleCue[] {
 
     optimized.push({
       ...cue,
-      endTime: Math.max(endTime, cue.startTime + 500), // Minimum 500ms
+      endTime: nextCue
+        ? Math.min(nextCue.startTime - 50, Math.max(endTime, cue.startTime + 500))
+        : Math.max(endTime, cue.startTime + 500), // Minimum 500ms
     });
   }
 
-  return optimized;
+  return optimized.filter(cue => cue.endTime > cue.startTime);
 }
 
 /**

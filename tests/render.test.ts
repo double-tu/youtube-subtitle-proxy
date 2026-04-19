@@ -203,7 +203,7 @@ describe('prepareCuesForRender', () => {
     expect(prepared[0].endTime).toBe(9000);
   });
 
-  it('does not split translation-only opening cues into multiple timed events just for layout', () => {
+  it('preserves translation-only opening text when splitting for two-line display', () => {
     delete process.env.SUBTITLE_OUTPUT_MODE;
     process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
     resetConfigForTests();
@@ -216,11 +216,12 @@ describe('prepareCuesForRender', () => {
     ];
 
     const prepared = prepareCuesForRender(cues, 'json3');
+    const combinedText = prepared.map(cue => cue.text).join('');
 
-    expect(prepared).toHaveLength(1);
     expect(prepared[0].startTime).toBe(0);
-    expect(prepared[0].endTime).toBe(5324);
-    expect(prepared[0].text).toContain('交易员们大家好');
-    expect(prepared[0].text).toContain('Humble Trader');
+    expect(prepared.at(-1)?.endTime).toBe(5324);
+    expect(prepared.every(cue => cue.text.split('\n').length <= 2)).toBe(true);
+    expect(combinedText).toContain('交易员们大家好');
+    expect(combinedText).toContain('Humble Trader');
   });
 });

@@ -20,6 +20,10 @@ const languageNames: Record<string, string> = {
   'ru': 'Russian',
 };
 
+const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const CHINESE_FRAGMENT_START_PATTERN = /^(?:的|了|着|过|并|但|而|或|及|将|把|被|在|对|给|从|向|为|与|且|则|也|又)/;
+const CHINESE_FRAGMENT_END_PATTERN = /(?:的|了|着|过|而|并|及|将|把|被|在|对|给|从|向|为|与)$/;
+
 /**
  * Get OpenAI client instance
  */
@@ -380,6 +384,64 @@ type TranslationRange = {
   label: string;
 };
 
+function estimateDynamicBatchChars(maxTokens: number): number {
+  return Math.max(240, Math.min(2400, Math.floor(maxTokens * 1.8)));
+}
+
+function buildDynamicTranslationRanges(
+  cues: SubtitleCue[],
+  maxBatchItems: number,
+  maxBatchChars: number
+): TranslationRange[] {
+  if (cues.length === 0) {
+    return [];
+  }
+
+  const ranges: TranslationRange[] = [];
+  let start = 0;
+  let currentItems = 0;
+  let currentChars = 0;
+
+  for (let index = 0; index < cues.length; index++) {
+    const cueChars = Math.max(1, cues[index].text.trim().length);
+    const exceedsItems = currentItems >= maxBatchItems;
+    const exceedsChars = currentItems > 0 && (currentChars + cueChars) > maxBatchChars;
+
+    if (exceedsItems || exceedsChars) {
+      ranges.push({
+        start,
+        end: index,
+        label: '',
+      });
+      start = index;
+      currentItems = 0;
+      currentChars = 0;
+    }
+
+    currentItems++;
+    currentChars += cueChars;
+  }
+
+  ranges.push({
+    start,
+    end: cues.length,
+    label: '',
+  });
+
+  return ranges.map((range, index) => ({
+    ...range,
+    label: `${index + 1}/${ranges.length}`,
+  }));
+}
+
+export function debugBuildDynamicTranslationRanges(
+  cues: SubtitleCue[],
+  maxBatchItems: number,
+  maxBatchChars: number
+): Array<{ start: number; end: number; label: string }> {
+  return buildDynamicTranslationRanges(cues, maxBatchItems, maxBatchChars);
+}
+
 function visibleLength(text: string): number {
   return text.replace(/\s+/g, '').length;
 }
@@ -388,20 +450,43 @@ function isPunctuationOnly(text: string): boolean {
   return /^[\p{P}\p{S}\s]+$/u.test(text.trim());
 }
 
+function hasCjk(text: string): boolean {
+  return CJK_PATTERN.test(text);
+}
+
 function isSuspiciousContextTranslation(sourceText: string, translation: string): boolean {
   const sourceLength = visibleLength(sourceText);
   const translationLength = visibleLength(translation);
+  const trimmedTranslation = translation.trim();
 
-  if (!translation.trim() || isPunctuationOnly(translation)) {
+  if (!trimmedTranslation || isPunctuationOnly(trimmedTranslation)) {
     return true;
   }
 
-  if (sourceLength >= 18 && translationLength <= 3) {
+  if (sourceLength >= 12 && translationLength <= 2) {
     return true;
   }
 
-  if (sourceLength >= 35 && translationLength <= 6) {
+  if (sourceLength >= 18 && translationLength <= 4) {
     return true;
+  }
+
+  if (sourceLength >= 28 && translationLength <= 6) {
+    return true;
+  }
+
+  if (sourceLength >= 40 && translationLength <= 8) {
+    return true;
+  }
+
+  if (hasCjk(trimmedTranslation)) {
+    if (translationLength <= 8 && CHINESE_FRAGMENT_START_PATTERN.test(trimmedTranslation)) {
+      return true;
+    }
+
+    if (sourceLength >= 14 && translationLength <= 10 && CHINESE_FRAGMENT_END_PATTERN.test(trimmedTranslation)) {
+      return true;
+    }
   }
 
   return false;
@@ -498,7 +583,9 @@ export async function translateBatchWithContext(
   const precedingLines = Math.max(0, config.translationContext.precedingContextLines);
   const followingLines = Math.max(0, config.translationContext.followingContextLines);
   const maxTokens = config.translationContext.maxTokens;
-  const totalBatches = Math.max(1, Math.ceil(cues.length / batchSize));
+  const dynamicBatchChars = estimateDynamicBatchChars(maxTokens);
+  const ranges = buildDynamicTranslationRanges(cues, batchSize, dynamicBatchChars);
+  const totalBatches = Math.max(1, ranges.length);
   const batchConcurrency = Math.max(
     1,
     Math.min(config.translationContext.concurrency, totalBatches)
@@ -509,17 +596,10 @@ export async function translateBatchWithContext(
   const translatedTexts: Array<string | null> = new Array(cues.length).fill(null);
 
   console.log(
-    `[Translator] Context-aware translation started: ${cues.length} segments, batches=${totalBatches}, batchSize=${batchSize}, concurrency=${batchConcurrency}, retries=${batchRetries}, preceding=${precedingLines}, following=${followingLines}`
+    `[Translator] Context-aware translation started: ${cues.length} segments, batches=${totalBatches}, maxBatchItems=${batchSize}, dynamicBatchChars=${dynamicBatchChars}, concurrency=${batchConcurrency}, retries=${batchRetries}, preceding=${precedingLines}, following=${followingLines}`
   );
 
   try {
-    const ranges: TranslationRange[] = [];
-    for (let start = 0; start < cues.length; start += batchSize) {
-      const end = Math.min(start + batchSize, cues.length);
-      const batchIndex = Math.floor(start / batchSize) + 1;
-      ranges.push({ start, end, label: `${batchIndex}/${totalBatches}` });
-    }
-
     let nextRangeIndex = 0;
 
     const fallbackSingleLineByIndex = async (

@@ -25,6 +25,8 @@ const RENDER_DANGLING_MAX_DURATION_MS = 9000;
 const CJK_SOFT_BREAK_PATTERN = /[，。！？；：、…]/;
 const TRANSLATION_REBALANCE_MAX_GAP_MS = 1000;
 const MIN_REBALANCED_DURATION_MS = 700;
+const MAX_TRANSLATION_ONLY_LINES = 2;
+const MAX_TRANSLATION_ONLY_DURATION_MS = 7200;
 
 function isCjkText(text: string): boolean {
   return CJK_PATTERN.test(text);
@@ -432,6 +434,322 @@ function balanceWrappedLines(chunks: string[], limit: number): string[] {
   return balanced;
 }
 
+function normalizeRenderText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function getPrimaryRenderLimit(text: string): number {
+  const config = getConfig();
+  return isCjkText(text)
+    ? config.subtitle.renderMaxCharsCjk
+    : config.subtitle.renderMaxWords;
+}
+
+function countWrappedLines(text: string, limit: number): number {
+  return balanceWrappedLines(splitForRender(text, limit), limit).length;
+}
+
+function splitTranslationSentenceParts(text: string): string[] {
+  const normalized = normalizeRenderText(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const isCjk = isCjkText(normalized);
+  const strongPattern = isCjk
+    ? /(?<=[。！？；：…])/
+    : /(?<=[.!?;:])\s+/;
+  const softPattern = isCjk
+    ? /(?<=[，、])/
+    : /(?<=[,])\s+/;
+
+  const splitWithPattern = (pattern: RegExp) => normalized
+    .split(pattern)
+    .map(part => normalizeRenderText(part))
+    .filter(Boolean);
+
+  const strongParts = splitWithPattern(strongPattern);
+  if (strongParts.length > 1) {
+    return strongParts;
+  }
+
+  const softParts = splitWithPattern(softPattern);
+  return softParts.length > 1 ? softParts : [normalized];
+}
+
+function groupTextByWrappedLines(text: string, limit: number): string[] {
+  const wrappedLines = balanceWrappedLines(splitForRender(text, limit), limit);
+  if (wrappedLines.length <= MAX_TRANSLATION_ONLY_LINES) {
+    return [normalizeRenderText(text)];
+  }
+
+  const grouped: string[] = [];
+  for (let i = 0; i < wrappedLines.length; i += MAX_TRANSLATION_ONLY_LINES) {
+    grouped.push(combineRenderTexts(wrappedLines.slice(i, i + MAX_TRANSLATION_ONLY_LINES)));
+  }
+
+  return grouped.filter(Boolean);
+}
+
+function isShortTranslationOnlyText(text: string): boolean {
+  const normalized = normalizeRenderText(text);
+  if (!normalized || SYMBOL_START_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  const length = textLength(normalized);
+  return isCjkText(normalized)
+    ? length <= 8
+    : length <= 3;
+}
+
+function shouldAttachShortTextToPrevious(previousText: string, currentText: string): boolean {
+  const previous = normalizeRenderText(previousText);
+  const current = normalizeRenderText(currentText);
+
+  if (!previous || !current) {
+    return false;
+  }
+
+  return /[，、,]$/.test(previous)
+    || (
+      !STRONG_SENTENCE_END_PATTERN.test(previous)
+      && STRONG_SENTENCE_END_PATTERN.test(current)
+    );
+}
+
+function rebalanceShortTextParts(parts: string[], limit: number): string[] {
+  const result: string[] = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const current = normalizeRenderText(parts[i]);
+    if (!current) {
+      continue;
+    }
+
+    if (!isShortTranslationOnlyText(current)) {
+      result.push(current);
+      continue;
+    }
+
+    const previous = result.at(-1);
+    const next = parts[i + 1] ? normalizeRenderText(parts[i + 1]) : '';
+
+    if (
+      previous
+      && (!next || shouldAttachShortTextToPrevious(previous, current))
+    ) {
+      result[result.length - 1] = combineRenderTexts([previous, current]);
+      continue;
+    }
+
+    if (next) {
+      const combined = combineRenderTexts([current, next]);
+      result.push(combined);
+      i++;
+      continue;
+    }
+
+    if (previous) {
+      result[result.length - 1] = combineRenderTexts([previous, current]);
+      continue;
+    }
+
+    result.push(current);
+  }
+
+  return result.flatMap(part => {
+    if (countWrappedLines(part, limit) <= MAX_TRANSLATION_ONLY_LINES) {
+      return [part];
+    }
+
+    return groupTextByWrappedLines(part, limit);
+  });
+}
+
+function distributeTranslationOnlyDuration(cue: SubtitleCue, parts: string[]): SubtitleCue[] {
+  if (parts.length <= 1) {
+    return [{ ...cue, text: normalizeRenderText(cue.text) }];
+  }
+
+  const totalWeight = parts.reduce((sum, part) => sum + Math.max(1, cueWeight(part)), 0);
+  const totalDuration = cue.endTime - cue.startTime;
+  let cursor = cue.startTime;
+
+  return parts.map((part, index) => {
+    const weight = Math.max(1, cueWeight(part));
+    const duration = index === parts.length - 1
+      ? cue.endTime - cursor
+      : Math.max(900, Math.round((weight / totalWeight) * totalDuration));
+    const startTime = cursor;
+    const endTime = index === parts.length - 1
+      ? cue.endTime
+      : Math.min(cue.endTime, startTime + duration);
+
+    cursor = endTime;
+    return {
+      startTime,
+      endTime,
+      text: part,
+    };
+  }).filter(item => item.endTime > item.startTime);
+}
+
+function splitTranslationOnlyCueForDisplay(cue: SubtitleCue): SubtitleCue[] {
+  const normalizedText = normalizeRenderText(cue.text);
+  if (!normalizedText) {
+    return [];
+  }
+
+  const limit = getPrimaryRenderLimit(normalizedText);
+  const wrappedLines = balanceWrappedLines(splitForRender(normalizedText, limit), limit);
+  const duration = cue.endTime - cue.startTime;
+
+  if (
+    wrappedLines.length <= MAX_TRANSLATION_ONLY_LINES
+    && duration <= MAX_TRANSLATION_ONLY_DURATION_MS
+  ) {
+    return [{ ...cue, text: normalizedText }];
+  }
+
+  const sentenceParts = splitTranslationSentenceParts(normalizedText);
+  const groupedParts: string[] = [];
+  let current = '';
+
+  for (const part of sentenceParts) {
+    const candidate = current ? combineRenderTexts([current, part]) : part;
+    if (
+      current
+      && countWrappedLines(candidate, limit) > MAX_TRANSLATION_ONLY_LINES
+    ) {
+      groupedParts.push(current);
+      current = part;
+      continue;
+    }
+
+    current = candidate;
+  }
+
+  if (current) {
+    groupedParts.push(current);
+  }
+
+  let finalParts = groupedParts.filter(Boolean);
+  if (finalParts.length <= 1) {
+    finalParts = groupTextByWrappedLines(normalizedText, limit);
+  }
+
+  finalParts = finalParts.flatMap(part => {
+    if (countWrappedLines(part, limit) <= MAX_TRANSLATION_ONLY_LINES) {
+      return [part];
+    }
+
+    return groupTextByWrappedLines(part, limit);
+  }).filter(Boolean);
+  finalParts = rebalanceShortTextParts(finalParts, limit);
+
+  if (finalParts.length <= 1) {
+    return [{ ...cue, text: normalizedText }];
+  }
+
+  return distributeTranslationOnlyDuration(cue, finalParts);
+}
+
+function canRebalanceAdjacentDisplayCues(left: SubtitleCue, right: SubtitleCue): boolean {
+  return right.startTime - left.endTime <= RENDER_COMPACT_MAX_GAP_MS;
+}
+
+function rebalanceShortTranslationOnlyDisplayCues(cues: SubtitleCue[]): SubtitleCue[] {
+  const normalized = cues
+    .map(cue => ({
+      ...cue,
+      text: normalizeRenderText(cue.text),
+    }))
+    .filter(cue => cue.text);
+
+  const result: SubtitleCue[] = [];
+
+  for (let i = 0; i < normalized.length; i++) {
+    const current = normalized[i];
+
+    if (!isShortTranslationOnlyText(current.text)) {
+      result.push(current);
+      continue;
+    }
+
+    const previous = result.at(-1);
+    const next = normalized[i + 1];
+
+    if (
+      previous
+      && canRebalanceAdjacentDisplayCues(previous, current)
+      && (!next || shouldAttachShortTextToPrevious(previous.text, current.text))
+    ) {
+      result.pop();
+      result.push(...splitTranslationOnlyCueForDisplay({
+        startTime: previous.startTime,
+        endTime: current.endTime,
+        text: combineRenderTexts([previous.text, current.text]),
+      }));
+      continue;
+    }
+
+    if (next && canRebalanceAdjacentDisplayCues(current, next)) {
+      result.push(...splitTranslationOnlyCueForDisplay({
+        startTime: current.startTime,
+        endTime: next.endTime,
+        text: combineRenderTexts([current.text, next.text]),
+      }));
+      i++;
+      continue;
+    }
+
+    if (previous && canRebalanceAdjacentDisplayCues(previous, current)) {
+      result.pop();
+      result.push(...splitTranslationOnlyCueForDisplay({
+        startTime: previous.startTime,
+        endTime: current.endTime,
+        text: combineRenderTexts([previous.text, current.text]),
+      }));
+      continue;
+    }
+
+    result.push(current);
+  }
+
+  return result;
+}
+
+function enforceTranslationOnlyLineLimit(cues: SubtitleCue[]): SubtitleCue[] {
+  return cues.flatMap(cue => {
+    const text = normalizeRenderText(cue.text);
+    if (!text) {
+      return [];
+    }
+
+    const limit = getPrimaryRenderLimit(text);
+    if (countWrappedLines(text, limit) <= MAX_TRANSLATION_ONLY_LINES) {
+      return [{ ...cue, text }];
+    }
+
+    return splitTranslationOnlyCueForDisplay({ ...cue, text });
+  });
+}
+
+function shouldKeepTranslationOnlyCueAsSingleEvent(cue: SubtitleCue): boolean {
+  const normalizedText = normalizeRenderText(cue.text);
+  if (!normalizedText) {
+    return true;
+  }
+
+  const limit = getPrimaryRenderLimit(normalizedText);
+  const wrappedLines = balanceWrappedLines(splitForRender(normalizedText, limit), limit);
+  const duration = cue.endTime - cue.startTime;
+  const lineOverflow = wrappedLines.length - MAX_TRANSLATION_ONLY_LINES;
+
+  return duration <= 5600 && lineOverflow <= 1;
+}
+
 function applyRenderLineLimits(
   cue: SubtitleCue,
   format: SubtitleRenderFormat,
@@ -533,8 +851,15 @@ export function prepareCuesForRender(
 
     const repairedCues = repairTranslationOnlyBoundaries(translationOnlyCues);
     const compactedCues = compactTranslationOnlyRenderCues(repairedCues);
+    const displayCues = compactedCues.flatMap(cue => (
+      shouldKeepTranslationOnlyCueAsSingleEvent(cue)
+        ? [{ ...cue, text: normalizeRenderText(cue.text) }]
+        : splitTranslationOnlyCueForDisplay(cue)
+    ));
+    const rebalancedDisplayCues = rebalanceShortTranslationOnlyDisplayCues(displayCues);
+    const lineLimitedDisplayCues = enforceTranslationOnlyLineLimit(rebalancedDisplayCues);
 
-    return compactedCues.map(cue => applyRenderLineLimits(cue, format, {
+    return lineLimitedDisplayCues.map(cue => applyRenderLineLimits(cue, format, {
         primary: cue.text,
         secondary: '',
       }));

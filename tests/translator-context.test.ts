@@ -61,7 +61,7 @@ describe('translator context batching', () => {
         choices: [
           {
             message: {
-              content: '[{"id":0,"translation":"T0"},{"id":1,"translation":"T1"}]',
+              content: '[{"id":0,"translation":"这是第零句的正常翻译结果"},{"id":1,"translation":"这是第一句的正常翻译结果"}]',
             },
           },
         ],
@@ -70,7 +70,7 @@ describe('translator context batching', () => {
         choices: [
           {
             message: {
-              content: '[{"id":2,"translation":"T2"},{"id":3,"translation":"T3"}]',
+              content: '[{"id":2,"translation":"这是第二句的正常翻译结果"},{"id":3,"translation":"这是第三句的正常翻译结果"}]',
             },
           },
         ],
@@ -87,28 +87,27 @@ describe('translator context batching', () => {
     });
 
     const cues = [
-      { startTime: 0, endTime: 1000, text: 'Hello world.' },
-      { startTime: 1000, endTime: 2000, text: 'This is a test.' },
-      { startTime: 2000, endTime: 3000, text: 'Final line.' },
-      { startTime: 3000, endTime: 4000, text: 'Wrap it up.' },
+      { startTime: 0, endTime: 1000, text: 'Hello world, this is the first longer source line for context translation.' },
+      { startTime: 1000, endTime: 2000, text: 'This is a test, and this is the second longer source line for batching.' },
+      { startTime: 2000, endTime: 3000, text: 'Final line, but still long enough to avoid suspicious short-translation fallback.' },
+      { startTime: 3000, endTime: 4000, text: 'Wrap it up with one more longer sentence so the fallback heuristic stays quiet.' },
     ];
 
     const results = await translateToBilingual(cues, 'zh-CN', 2);
 
     expect(results.map(cue => cue.text)).toEqual([
-      'Hello world.\nT0',
-      'This is a test.\nT1',
-      'Final line.\nT2',
-      'Wrap it up.\nT3',
+      `${cues[0].text}\n这是第零句的正常翻译结果`,
+      `${cues[1].text}\n这是第一句的正常翻译结果`,
+      `${cues[2].text}\n这是第二句的正常翻译结果`,
+      `${cues[3].text}\n这是第三句的正常翻译结果`,
     ]);
 
     expect(mockCreate).toHaveBeenCalledTimes(2);
 
     const secondPrompt = mockCreate.mock.calls[1][0].messages[0].content as string;
     expect(secondPrompt).toContain('Preceding Context (Original)');
-    expect(secondPrompt).toContain('[1] This is a test.');
-    expect(secondPrompt).toContain('[2] Final line.');
-    expect(secondPrompt).toContain('[3] Wrap it up.');
+    expect(secondPrompt).toContain('[3] Wrap it up with one more longer sentence');
+    expect(secondPrompt).toContain('[2] Final line, but still long enough');
     expect(secondPrompt).toContain('must correspond only to that ID');
     expect(secondPrompt).toContain('Do not omit, merge, move, reorder, summarize, or redistribute');
   });
@@ -215,5 +214,40 @@ describe('translator context batching', () => {
     ]);
 
     expect(mockCreate).toHaveBeenCalledTimes(5);
+  });
+
+  it('builds smaller dynamic context batches for long source lines', async () => {
+    const { debugBuildDynamicTranslationRanges } = await loadTranslator({
+      TRANSLATION_CONTEXT_ENABLED: 'true',
+      TRANSLATION_CONTEXT_BATCH_SIZE: '24',
+      TRANSLATION_CONTEXT_MAX_TOKENS: '160',
+      TRANSLATION_SUMMARY_ENABLED: 'false',
+      TRANSLATION_GLOSSARY_ENABLED: 'false',
+    });
+
+    const cues = [
+      {
+        startTime: 0,
+        endTime: 1000,
+        text: 'This is a deliberately long source subtitle line that should force the dynamic batch builder to stop early.',
+      },
+      {
+        startTime: 1000,
+        endTime: 2000,
+        text: 'This is another deliberately long source subtitle line that should remain in the same first batch only if budget allows.',
+      },
+      {
+        startTime: 2000,
+        endTime: 3000,
+        text: 'This third line should be pushed into the next batch once the character budget is exhausted.',
+      },
+    ];
+
+    const ranges = debugBuildDynamicTranslationRanges(cues, 24, 288);
+
+    expect(ranges).toEqual([
+      { start: 0, end: 2, label: '1/2' },
+      { start: 2, end: 3, label: '2/2' },
+    ]);
   });
 });
