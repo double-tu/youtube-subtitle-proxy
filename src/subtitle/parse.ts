@@ -4,9 +4,9 @@
  * Parses YouTube timedtext JSON format
  */
 import type { YouTubeTimedTextEvent, YouTubeTimedTextResponse, SubtitleCue } from '../types/subtitle.js';
+import { buildScrollingAsrTimeline, type SubtitleAtom } from './timeline.js';
 
 const SENTENCE_END_PATTERN = /[,.;!?，。！？；…]$/;
-const ESTIMATED_SEG_DURATION_MS = 200;
 const MAX_SCROLLING_ASR_CJK_CHARS = 34;
 const MAX_SCROLLING_ASR_WORDS = 20;
 const MAX_SCROLLING_ASR_CJK_OVERFLOW = 8;
@@ -159,99 +159,64 @@ function pushCue(cues: SubtitleCue[], cue: SubtitleCue): void {
   cues.push(cue);
 }
 
-function flushScrollingCue(
+function combineAtomTexts(atoms: SubtitleAtom[]): string {
+  let combined = '';
+
+  for (const atom of atoms) {
+    if (
+      combined
+      && !isCjkText(combined)
+      && !combined.endsWith(' ')
+      && !atom.text.startsWith(' ')
+    ) {
+      combined += ' ';
+    }
+
+    combined += atom.text;
+  }
+
+  return normalizeText(combined);
+}
+
+function flushAtomBuffer(
   cues: SubtitleCue[],
-  currentText: string,
-  currentStart: number,
-  currentEnd: number
-): boolean {
-  const text = normalizeText(currentText);
+  atomBuffer: SubtitleAtom[]
+): void {
+  if (atomBuffer.length === 0) {
+    return;
+  }
+
+  const text = combineAtomTexts(atomBuffer);
   if (!text) {
-    return false;
+    atomBuffer.length = 0;
+    return;
   }
 
   pushCue(cues, {
-    startTime: currentStart,
-    endTime: currentEnd,
+    startTime: atomBuffer[0].startTime,
+    endTime: atomBuffer[atomBuffer.length - 1].endTime,
     text,
   });
-  return true;
+
+  atomBuffer.length = 0;
 }
 
 function parseScrollingAsrTimedText(events: YouTubeTimedTextEvent[]): SubtitleCue[] {
   const cues: SubtitleCue[] = [];
-  let currentText = '';
-  let currentStart = 0;
-  let currentEnd = 0;
-  let isFirstSegment = true;
-  let pendingSplit = false;
+  const atoms = buildScrollingAsrTimeline(events);
+  const atomBuffer: SubtitleAtom[] = [];
 
-  for (const event of events) {
-    if (event.aAppend === 1) {
-      if (currentText) {
-        currentEnd = event.tStartMs + (event.dDurationMs || 0);
-        if (pendingSplit) {
-          flushScrollingCue(cues, currentText, currentStart, currentEnd);
-          currentText = '';
-          currentEnd = 0;
-          isFirstSegment = true;
-          pendingSplit = false;
-        }
-      }
-      continue;
-    }
+  for (const atom of atoms) {
+    atomBuffer.push(atom);
 
-    if (!event.segs || event.segs.length === 0) {
-      continue;
-    }
-
-    if (pendingSplit && currentText) {
-      flushScrollingCue(cues, currentText, currentStart, currentEnd);
-      currentText = '';
-      currentEnd = 0;
-      isFirstSegment = true;
-      pendingSplit = false;
-    }
-
-    for (let i = 0; i < event.segs.length; i++) {
-      const segment = event.segs[i];
-      const text = segment.utf8 || '';
-      const trimmed = text.trim();
-      const segStart = event.tStartMs + (segment.tOffsetMs || 0);
-
-      if (pendingSplit && currentText) {
-        flushScrollingCue(cues, currentText, currentStart, currentEnd);
-        currentText = '';
-        currentEnd = 0;
-        isFirstSegment = true;
-        pendingSplit = false;
-      }
-
-      if (!trimmed) {
-        continue;
-      }
-
-      if (isFirstSegment) {
-        currentStart = segStart;
-        isFirstSegment = false;
-      }
-
-      if (currentText && !isCjkText(currentText) && !currentText.endsWith(' ') && !text.startsWith(' ')) {
-        currentText += ' ';
-      }
-
-      currentText += text;
-      currentEnd = segStart + ESTIMATED_SEG_DURATION_MS;
-
-      const mergedText = normalizeText(currentText);
-      const reachedSentenceEnd = SENTENCE_END_PATTERN.test(trimmed);
-      if (shouldSplitScrollingCue(mergedText, reachedSentenceEnd)) {
-        pendingSplit = true;
-      }
+    const mergedText = combineAtomTexts(atomBuffer);
+    const reachedSentenceEnd = SENTENCE_END_PATTERN.test(atom.text.trim());
+    if (shouldSplitScrollingCue(mergedText, reachedSentenceEnd)) {
+      flushAtomBuffer(cues, atomBuffer);
     }
   }
 
-  flushScrollingCue(cues, currentText, currentStart, currentEnd);
+  flushAtomBuffer(cues, atomBuffer);
   return cues;
 }
 

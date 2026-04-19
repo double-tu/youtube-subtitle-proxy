@@ -96,88 +96,8 @@ function splitCjkForRender(text: string, limit: number): string[] {
   return parts;
 }
 
-function splitTranslationSentenceParts(text: string): string[] {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return [];
-  }
-
-  const isCjk = isCjkText(normalized);
-  const primaryPattern = isCjk
-    ? /(?<=[。！？；])/ 
-    : /(?<=[.!?;:])\s+/;
-  const primaryParts = normalized
-    .split(primaryPattern)
-    .map(part => part.trim())
-    .filter(Boolean);
-
-  if (primaryParts.length > 1) {
-    return primaryParts;
-  }
-
-  const secondaryPattern = isCjk
-    ? /(?<=[，、：…])/
-    : /(?<=[,])\s+/;
-  return normalized
-    .split(secondaryPattern)
-    .map(part => part.trim())
-    .filter(Boolean);
-}
-
 function cueWeight(text: string): number {
   return Math.max(1, text.replace(/\s+/g, '').length);
-}
-
-function distributeTranslationCueDuration(cue: SubtitleCue, parts: string[]): SubtitleCue[] {
-  if (parts.length <= 1) {
-    return [cue];
-  }
-
-  const totalDuration = cue.endTime - cue.startTime;
-  const totalWeight = parts.reduce((sum, part) => sum + cueWeight(part), 0);
-  let cursor = cue.startTime;
-
-  return parts.map((part, index) => {
-    const weight = cueWeight(part);
-    const duration = index === parts.length - 1
-      ? cue.endTime - cursor
-      : Math.max(
-          MIN_REBALANCED_DURATION_MS,
-          Math.round((weight / totalWeight) * totalDuration)
-        );
-    const startTime = cursor;
-    const endTime = index === parts.length - 1
-      ? cue.endTime
-      : Math.min(cue.endTime, startTime + duration);
-
-    cursor = endTime;
-    return {
-      startTime,
-      endTime,
-      text: part,
-    };
-  }).filter(item => item.endTime > item.startTime);
-}
-
-function splitLongTranslationOnlyCues(cues: SubtitleCue[]): SubtitleCue[] {
-  return cues.flatMap(cue => {
-    const bounds = getRenderBounds(cue.text);
-    const duration = cue.endTime - cue.startTime;
-    const length = textLength(cue.text);
-    const sentenceCount = (cue.text.match(/[。！？；.!?;:]/g) || []).length;
-    const shouldSplit = duration > 5200 || length > bounds.max || sentenceCount >= 2;
-
-    if (!shouldSplit) {
-      return [cue];
-    }
-
-    const parts = splitTranslationSentenceParts(cue.text);
-    if (parts.length <= 1) {
-      return [cue];
-    }
-
-    return distributeTranslationCueDuration(cue, parts);
-  });
 }
 
 function findLastBoundaryIndex(text: string): number {
@@ -266,45 +186,6 @@ function rebalanceCueTiming(left: SubtitleCue, right: SubtitleCue, leftText: str
   };
 }
 
-function repairTranslationOnlyBoundaries(cues: SubtitleCue[]): SubtitleCue[] {
-  const repaired = cues.map(cue => ({
-    ...cue,
-    text: cue.text.replace(/\s+/g, ' ').trim(),
-  }));
-
-  for (let i = 0; i < repaired.length - 1; i++) {
-    let current = repaired[i];
-    let next = repaired[i + 1];
-
-    if (next.startTime - current.endTime > TRANSLATION_REBALANCE_MAX_GAP_MS) {
-      continue;
-    }
-
-    const trailing = extractTrailingDanglingText(current.text);
-    if (trailing && next.text) {
-      const nextText = combineRenderTexts([trailing.tail, next.text]);
-      const rebalanced = rebalanceCueTiming(current, next, trailing.head, nextText);
-      current = rebalanced.left;
-      next = rebalanced.right;
-    }
-
-    if (TRAILING_CONNECTOR_PATTERN.test(current.text.trim())) {
-      const leading = extractLeadingBridgeText(next.text);
-      if (leading) {
-        const currentText = combineRenderTexts([current.text, leading.prefix]);
-        const rebalanced = rebalanceCueTiming(current, next, currentText, leading.suffix);
-        current = rebalanced.left;
-        next = rebalanced.right;
-      }
-    }
-
-    repaired[i] = current;
-    repaired[i + 1] = next;
-  }
-
-  return repaired.filter(cue => cue.text.trim());
-}
-
 function findCjkSplitIndex(text: string, limit: number): number {
   const hardLimit = Math.min(text.length, Math.max(1, limit));
   const minIndex = Math.max(1, Math.floor(limit * 0.55));
@@ -391,6 +272,45 @@ function isLikelyDanglingCueText(text: string): boolean {
   return length <= 3 && !STRONG_SENTENCE_END_PATTERN.test(trimmed);
 }
 
+function repairTranslationOnlyBoundaries(cues: SubtitleCue[]): SubtitleCue[] {
+  const repaired = cues.map(cue => ({
+    ...cue,
+    text: cue.text.replace(/\s+/g, ' ').trim(),
+  }));
+
+  for (let i = 0; i < repaired.length - 1; i++) {
+    let current = repaired[i];
+    let next = repaired[i + 1];
+
+    if (next.startTime - current.endTime > TRANSLATION_REBALANCE_MAX_GAP_MS) {
+      continue;
+    }
+
+    const trailing = extractTrailingDanglingText(current.text);
+    if (trailing && next.text) {
+      const nextText = combineRenderTexts([trailing.tail, next.text]);
+      const rebalanced = rebalanceCueTiming(current, next, trailing.head, nextText);
+      current = rebalanced.left;
+      next = rebalanced.right;
+    }
+
+    if (TRAILING_CONNECTOR_PATTERN.test(current.text.trim())) {
+      const leading = extractLeadingBridgeText(next.text);
+      if (leading) {
+        const currentText = combineRenderTexts([current.text, leading.prefix]);
+        const rebalanced = rebalanceCueTiming(current, next, currentText, leading.suffix);
+        current = rebalanced.left;
+        next = rebalanced.right;
+      }
+    }
+
+    repaired[i] = current;
+    repaired[i + 1] = next;
+  }
+
+  return repaired.filter(cue => cue.text.trim());
+}
+
 function canCompactRenderCue(current: SubtitleCue, next: SubtitleCue): boolean {
   const gap = next.startTime - current.endTime;
   if (gap > RENDER_COMPACT_MAX_GAP_MS || SYMBOL_START_PATTERN.test(next.text.trim())) {
@@ -423,7 +343,7 @@ function canCompactRenderCue(current: SubtitleCue, next: SubtitleCue): boolean {
     ? RENDER_DANGLING_MAX_DURATION_MS
     : RENDER_COMPACT_MAX_DURATION_MS;
 
-  if (combinedLength > combinedMaxLength) {
+  if (combinedLength > combinedMaxLength || combinedDuration > combinedMaxDuration) {
     return false;
   }
 
@@ -432,19 +352,11 @@ function canCompactRenderCue(current: SubtitleCue, next: SubtitleCue): boolean {
     && currentDuration >= RENDER_COMPACT_MIN_DURATION_MS
     && !currentDangling
     && !nextDangling
-    && combinedDuration > combinedMaxDuration
   ) {
     return false;
   }
 
-  if (combinedDuration > combinedMaxDuration) {
-    return false;
-  }
-
-  return currentLength < bounds.min
-    || currentDuration < RENDER_COMPACT_MIN_DURATION_MS
-    || currentDangling
-    || nextDangling;
+  return true;
 }
 
 function mergeRenderCuePair(left: SubtitleCue, right: SubtitleCue): SubtitleCue {
@@ -480,29 +392,44 @@ function compactTranslationOnlyRenderCues(cues: SubtitleCue[]): SubtitleCue[] {
     result.push(current);
   }
 
-  for (let i = result.length - 1; i > 0; i--) {
-    const current = result[i];
-    const previous = result[i - 1];
-    const currentLength = textLength(current.text);
-    const currentDuration = current.endTime - current.startTime;
-    const bounds = getRenderBounds(current.text);
-    const merged = mergeRenderCuePair(previous, current);
-    const mergedBounds = getRenderBounds(merged.text);
-    const currentDangling = isLikelyDanglingCueText(current.text);
+  return result;
+}
 
-    if (
-      (currentDangling || (currentLength < bounds.min && currentDuration < RENDER_COMPACT_MIN_DURATION_MS))
-      && current.startTime - previous.endTime <= RENDER_COMPACT_MAX_GAP_MS
-      && !SYMBOL_START_PATTERN.test(current.text.trim())
-      && textLength(merged.text) <= mergedBounds.max
-      && merged.endTime - merged.startTime <= RENDER_DANGLING_MAX_DURATION_MS
-    ) {
-      result[i - 1] = merged;
-      result.splice(i, 1);
-    }
+function balanceWrappedLines(chunks: string[], limit: number): string[] {
+  if (chunks.length <= 1) {
+    return chunks;
   }
 
-  return result;
+  const balanced = [...chunks];
+  const minTailLength = isCjkText(chunks.join(''))
+    ? Math.max(4, Math.floor(limit * 0.35))
+    : Math.max(2, Math.floor(limit * 0.35));
+
+  for (let index = balanced.length - 1; index > 0; index--) {
+    const current = balanced[index];
+    if (textLength(current) >= minTailLength) {
+      continue;
+    }
+
+    const previous = balanced[index - 1];
+    const merged = isCjkText(current) || isCjkText(previous)
+      ? `${previous}${current}`
+      : `${previous} ${current}`;
+    const redistributed = splitForRender(merged, limit);
+
+    if (redistributed.length !== 2) {
+      continue;
+    }
+
+    if (textLength(redistributed[1]) <= textLength(current)) {
+      continue;
+    }
+
+    balanced[index - 1] = redistributed[0];
+    balanced[index] = redistributed[1];
+  }
+
+  return balanced;
 }
 
 function applyRenderLineLimits(
@@ -515,8 +442,8 @@ function applyRenderLineLimits(
   const wordLimit = config.subtitle.renderMaxWords;
   const primaryLimit = isCjkText(outputText.primary) ? cjkLimit : wordLimit;
   const secondaryLimit = isCjkText(outputText.secondary) ? cjkLimit : wordLimit;
-  const primaryChunks = splitForRender(outputText.primary, primaryLimit);
-  const secondaryChunks = splitForRender(outputText.secondary, secondaryLimit);
+  const primaryChunks = balanceWrappedLines(splitForRender(outputText.primary, primaryLimit), primaryLimit);
+  const secondaryChunks = balanceWrappedLines(splitForRender(outputText.secondary, secondaryLimit), secondaryLimit);
 
   if (!outputText.secondary) {
     return {
@@ -591,7 +518,7 @@ export function prepareCuesForRender(
 ): SubtitleCue[] {
   const outputMode = getConfig().subtitle.outputMode;
   if (outputMode === 'translation-only') {
-    const selectedCues = cues
+    const translationOnlyCues = cues
       .map(cue => {
         const [originalLine = '', ...translationLines] = cue.text.split(/\r?\n/);
         const translationLine = translationLines.join(' ').trim();
@@ -604,18 +531,10 @@ export function prepareCuesForRender(
       })
       .filter(cue => cue.text.trim());
 
-    const readableCues = repairTranslationOnlyBoundaries(
-      splitLongTranslationOnlyCues(selectedCues)
-    );
+    const repairedCues = repairTranslationOnlyBoundaries(translationOnlyCues);
+    const compactedCues = compactTranslationOnlyRenderCues(repairedCues);
 
-    return compactTranslationOnlyRenderCues(readableCues)
-      .filter(cue => cue.text.trim())
-      .map(cue => applyRenderLineLimits(cue, format, {
-        primary: cue.text,
-        secondary: '',
-      }))
-      .flatMap(cue => repairTranslationOnlyBoundaries([cue]))
-      .map(cue => applyRenderLineLimits(cue, format, {
+    return compactedCues.map(cue => applyRenderLineLimits(cue, format, {
         primary: cue.text,
         secondary: '',
       }));

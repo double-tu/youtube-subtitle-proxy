@@ -7,10 +7,8 @@ import { randomUUID } from 'crypto';
 import { getConfig } from '../config/env.js';
 import { parseYouTubeTimedText } from '../subtitle/parse.js';
 import {
-  compactShortCues,
-  mergeSubtitleCues,
+  buildSourceSegments,
   optimizeBilingualCues,
-  optimizeSourceCues,
   optimizeSubtitleTiming,
 } from '../subtitle/segment.js';
 import { renderWebVTT } from '../subtitle/render.js';
@@ -205,12 +203,7 @@ async function processTask(task: TranslationTask): Promise<void> {
     // Parse original subtitles
     const originalCues = parseYouTubeTimedText(originalJson);
     const preserveTiming = config.subtitle.outputMode === 'translation-only';
-
-    // Single-language output should preserve original timing but still compact overly fragmented ASR cues.
-    const sourceCues = preserveTiming
-      ? compactShortCues(originalCues)
-      : mergeSubtitleCues(originalCues);
-    const optimizedSourceCues = optimizeSourceCues(sourceCues, { preserveTiming });
+    const optimizedSourceCues = buildSourceSegments(originalJson, originalCues, { preserveTiming });
 
     // Optimize timing
     const optimizedCues = optimizeSubtitleTiming(optimizedSourceCues);

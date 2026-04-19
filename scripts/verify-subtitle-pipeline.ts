@@ -6,6 +6,7 @@ import { translateToBilingual } from '../src/services/translator.js';
 import { parseYouTubeTimedText, parseWebVTT } from '../src/subtitle/parse.js';
 import { renderWebVTT, renderYouTubeTimedText } from '../src/subtitle/render.js';
 import {
+  buildSourceSegments,
   compactShortCues,
   mergeSubtitleCues,
   optimizeBilingualCues,
@@ -218,10 +219,8 @@ async function main(): Promise<void> {
   const originalJson = JSON.parse(rawJson) as YouTubeTimedTextResponse;
   const originalCues = parseYouTubeTimedText(originalJson);
   const preserveTiming = config.subtitle.outputMode === 'translation-only';
-  const sourceCues = preserveTiming
-    ? compactShortCues(originalCues)
-    : mergeSubtitleCues(originalCues);
-  const optimizedSourceCues = optimizeSourceCues(sourceCues, { preserveTiming });
+  const sourceCues = buildSourceSegments(originalJson, originalCues, { preserveTiming });
+  const optimizedSourceCues = sourceCues;
   const optimizedCues = optimizeSubtitleTiming(optimizedSourceCues);
 
   console.log(

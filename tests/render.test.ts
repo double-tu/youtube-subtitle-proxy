@@ -199,5 +199,28 @@ describe('prepareCuesForRender', () => {
 
     expect(prepared).toHaveLength(1);
     expect(prepared[0].text.split('\n').length).toBeGreaterThan(1);
+    expect(prepared[0].startTime).toBe(0);
+    expect(prepared[0].endTime).toBe(9000);
+  });
+
+  it('does not split translation-only opening cues into multiple timed events just for layout', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 5324,
+        text: "Original\n交易员们大家好，如果你是新来的，我叫 Shea，也就是 Humble Trader",
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].startTime).toBe(0);
+    expect(prepared[0].endTime).toBe(5324);
+    expect(prepared[0].text).toContain('交易员们大家好');
+    expect(prepared[0].text).toContain('Humble Trader');
   });
 });

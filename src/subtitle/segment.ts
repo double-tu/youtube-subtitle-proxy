@@ -5,6 +5,7 @@
  */
 import type { SubtitleCue } from '../types/subtitle.js';
 import { getConfig } from '../config/env.js';
+import { buildScrollingAsrTimeline, type SubtitleAtom } from './timeline.js';
 
 const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
 const REPEATED_CHEVRON_PATTERN = />>/g;
@@ -134,6 +135,25 @@ function normalizeCueText(text: string): string {
     .replace(REPEATED_CHEVRON_PATTERN, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function combineAtomTexts(atoms: SubtitleAtom[]): string {
+  let combined = '';
+
+  for (const atom of atoms) {
+    if (
+      combined
+      && !isCjkText(combined)
+      && !combined.endsWith(' ')
+      && !atom.text.startsWith(' ')
+    ) {
+      combined += ' ';
+    }
+
+    combined += atom.text;
+  }
+
+  return normalizeCueText(combined);
 }
 
 function isCjkText(text: string): boolean {
@@ -514,6 +534,131 @@ function improveSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
   return rebalanceSourceCues(expanded);
 }
 
+function improvePreservedSourceCueQuality(cues: SubtitleCue[]): SubtitleCue[] {
+  if (cues.length <= 1) {
+    return cues;
+  }
+
+  const normalized = cues
+    .map(cue => ({
+      ...cue,
+      text: normalizeCueText(cue.text),
+    }))
+    .filter(cue => cue.text);
+
+  const compacted = compactShortCues(normalized);
+  return rebalanceSourceCues(compacted);
+}
+
+function buildCueFromAtoms(atoms: SubtitleAtom[]): SubtitleCue | null {
+  if (atoms.length === 0) {
+    return null;
+  }
+
+  const text = combineAtomTexts(atoms);
+  if (!text) {
+    return null;
+  }
+
+  return {
+    startTime: atoms[0].startTime,
+    endTime: atoms[atoms.length - 1].endTime,
+    text,
+  };
+}
+
+function shouldFlushAtomSegment(
+  atomBuffer: SubtitleAtom[],
+  nextAtom: SubtitleAtom | undefined,
+  preserveTiming: boolean
+): boolean {
+  if (atomBuffer.length === 0) {
+    return false;
+  }
+
+  const currentCue = buildCueFromAtoms(atomBuffer);
+  if (!currentCue) {
+    return true;
+  }
+
+  const currentText = currentCue.text;
+  const currentStats = getTextStats(currentText);
+  const bounds = getTargetBounds(currentStats.isCjk);
+  const duration = currentCue.endTime - currentCue.startTime;
+  const gap = nextAtom ? (nextAtom.startTime - atomBuffer[atomBuffer.length - 1].endTime) : Number.POSITIVE_INFINITY;
+  const reachedStrongBoundary = STRONG_SENTENCE_END_PATTERN.test(currentText);
+  const reachedSoftBoundary = currentStats.isCjk
+    ? /[，、；：。！？…]$/.test(currentText)
+    : /[,.;:!?]$/.test(currentText);
+
+  if (!nextAtom) {
+    return true;
+  }
+
+  if (gap > 1000) {
+    return true;
+  }
+
+  if (preserveTiming) {
+    if (reachedStrongBoundary) {
+      return true;
+    }
+
+    return currentStats.length >= bounds.max;
+  }
+
+  if (reachedStrongBoundary && duration >= 1800) {
+    return true;
+  }
+
+  if (
+    reachedSoftBoundary
+    && currentStats.length >= bounds.min
+    && duration >= 1500
+  ) {
+    return true;
+  }
+
+  return currentStats.length >= bounds.max;
+}
+
+function segmentAtoms(
+  atoms: SubtitleAtom[],
+  options?: {
+    preserveTiming?: boolean;
+  }
+): SubtitleCue[] {
+  if (atoms.length === 0) {
+    return [];
+  }
+
+  const result: SubtitleCue[] = [];
+  const atomBuffer: SubtitleAtom[] = [];
+
+  for (let i = 0; i < atoms.length; i++) {
+    const atom = atoms[i];
+    const nextAtom = atoms[i + 1];
+    atomBuffer.push(atom);
+
+    if (shouldFlushAtomSegment(atomBuffer, nextAtom, Boolean(options?.preserveTiming))) {
+      const cue = buildCueFromAtoms(atomBuffer);
+      if (cue) {
+        result.push(cue);
+      }
+      atomBuffer.length = 0;
+    }
+  }
+
+  if (atomBuffer.length > 0) {
+    const cue = buildCueFromAtoms(atomBuffer);
+    if (cue) {
+      result.push(cue);
+    }
+  }
+
+  return result;
+}
+
 function distributeCueDuration(
   startTime: number,
   endTime: number,
@@ -638,6 +783,29 @@ export function optimizeSourceCues(
   }
 
   return improveSourceCueQuality(normalized);
+}
+
+export function buildSourceSegments(
+  originalJson: { events?: Array<any> },
+  parsedCues: SubtitleCue[],
+  options?: {
+    preserveTiming?: boolean;
+  }
+): SubtitleCue[] {
+  const events = Array.isArray(originalJson.events) ? originalJson.events : [];
+  const atoms = buildScrollingAsrTimeline(events);
+
+  if (atoms.length === 0) {
+    const sourceCues = options?.preserveTiming
+      ? compactShortCues(parsedCues)
+      : mergeSubtitleCues(parsedCues);
+    return optimizeSourceCues(sourceCues, options);
+  }
+
+  const segmented = segmentAtoms(atoms, options);
+  return options?.preserveTiming
+    ? improvePreservedSourceCueQuality(segmented)
+    : improveSourceCueQuality(segmented);
 }
 
 export function compactShortCues(cues: SubtitleCue[]): SubtitleCue[] {
