@@ -57,6 +57,56 @@ describe('parseYouTubeTimedText', () => {
     expect(cues[0].endTime).toBe(3010);
     expect(cues[1].text).toBe('Next sentence');
   });
+
+  it('avoids splitting scrolling ASR cues on weak trailing English words', () => {
+    const cues = parseYouTubeTimedText({
+      events: [
+        {
+          tStartMs: 0,
+          dDurationMs: 2000,
+          wWinId: 1,
+          segs: [
+            { utf8: 'remember' },
+            { utf8: ' to', tOffsetMs: 100 },
+            { utf8: ' share', tOffsetMs: 200 },
+            { utf8: ' the', tOffsetMs: 300 },
+            { utf8: ' crash', tOffsetMs: 400 },
+            { utf8: ' course', tOffsetMs: 500 },
+            { utf8: ' with', tOffsetMs: 600 },
+          ],
+        },
+        {
+          tStartMs: 2000,
+          dDurationMs: 10,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+        {
+          tStartMs: 2010,
+          dDurationMs: 2000,
+          wWinId: 1,
+          segs: [
+            { utf8: 'another' },
+            { utf8: ' person', tOffsetMs: 100 },
+            { utf8: ' who', tOffsetMs: 200 },
+            { utf8: ' needs', tOffsetMs: 300 },
+            { utf8: ' it.', tOffsetMs: 400 },
+          ],
+        },
+        {
+          tStartMs: 4010,
+          dDurationMs: 10,
+          wWinId: 1,
+          aAppend: 1,
+          segs: [{ utf8: '\n' }],
+        },
+      ],
+    });
+
+    expect(cues).toHaveLength(1);
+    expect(cues[0].text).toBe('remember to share the crash course with another person who needs it.');
+  });
 });
 
 describe('mergeSubtitleCues', () => {
@@ -155,6 +205,23 @@ describe('optimizeSourceCues', () => {
     expect(optimized.length).toBeGreaterThan(1);
     expect(optimized[0].text).toContain('This is the first complete sentence');
     expect(optimized[1].text).toContain('This is the second complete sentence');
+  });
+
+  it('splits long english cues in preserveTiming mode without ending on weak words', () => {
+    const cues = [
+      {
+        startTime: 0,
+        endTime: 8000,
+        text: 'remember to share the crash course with another person who needs it in my case I will be sharing this with Mike today',
+      },
+    ];
+
+    const optimized = optimizeSourceCues(cues, { preserveTiming: true });
+
+    expect(optimized.length).toBeGreaterThan(1);
+    expect(optimized[0].text.endsWith('with')).toBe(false);
+    expect(optimized[0].text.endsWith('the')).toBe(false);
+    expect(optimized[0].endTime).toBeLessThanOrEqual(optimized[1].startTime);
   });
 });
 

@@ -12,6 +12,70 @@ const SYMBOL_START_PATTERN = /^[[(♪]/;
 const LEADING_PUNCTUATION_PATTERN = /^[,.;:!?，。！？；：、]/;
 const TRAILING_CONNECTOR_PATTERN = /(?:和|与|或|而|并|从|向|给|把|被|对|在|为|将|让|跟|比|及)$/;
 const PUNCTUATION_ONLY_PATTERN = /^[\p{P}\p{S}\s]+$/u;
+const UNSAFE_TRAILING_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'because',
+  'been',
+  'being',
+  'but',
+  'by',
+  'can',
+  'could',
+  'did',
+  'do',
+  'does',
+  'for',
+  'from',
+  'had',
+  'has',
+  'have',
+  'i',
+  'if',
+  'in',
+  'into',
+  'is',
+  'it',
+  'may',
+  'might',
+  'must',
+  'of',
+  'on',
+  'or',
+  'our',
+  'over',
+  'should',
+  'so',
+  'that',
+  'the',
+  'their',
+  'then',
+  'there',
+  'these',
+  'this',
+  'those',
+  'to',
+  'under',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'who',
+  'will',
+  'with',
+  'would',
+  'you',
+  'your',
+]);
 const PAUSE_WORDS = new Set([
   'actually',
   'also',
@@ -145,6 +209,180 @@ function splitSentenceParts(text: string): string[] {
     .filter(Boolean);
 
   return parts.length > 0 ? parts : [normalized];
+}
+
+function distributeMonolingualCueDuration(
+  cue: SubtitleCue,
+  parts: string[]
+): SubtitleCue[] {
+  if (parts.length <= 1) {
+    return [cue];
+  }
+
+  const totalWeight = parts.reduce((sum, part) => sum + Math.max(1, getTextStats(part).length), 0);
+  const totalDuration = cue.endTime - cue.startTime;
+  let cursor = cue.startTime;
+
+  return parts.map((part, index) => {
+    const weight = Math.max(1, getTextStats(part).length);
+    const duration = index === parts.length - 1
+      ? cue.endTime - cursor
+      : Math.max(500, Math.round((weight / totalWeight) * totalDuration));
+    const startTime = cursor;
+    const endTime = index === parts.length - 1
+      ? cue.endTime
+      : Math.min(cue.endTime, startTime + duration);
+
+    cursor = endTime;
+    return {
+      startTime,
+      endTime,
+      text: part,
+    };
+  }).filter(item => item.endTime > item.startTime);
+}
+
+function getLastEnglishWord(text: string): string {
+  const match = normalizeCueText(text).match(/[A-Za-z][A-Za-z'-]*$/);
+  return match ? match[0].toLowerCase() : '';
+}
+
+function isSafeEnglishChunkBoundary(words: string[], endExclusive: number): boolean {
+  const left = words.slice(0, endExclusive).join(' ');
+  const right = words.slice(endExclusive).join(' ');
+  const lastWord = getLastEnglishWord(left);
+
+  return Boolean(left.trim())
+    && Boolean(right.trim())
+    && !UNSAFE_TRAILING_WORDS.has(lastWord)
+    && !/-$/.test(lastWord);
+}
+
+function splitEnglishCueByLength(text: string, maxWords: number): string[] {
+  const words = normalizeCueText(text).split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) {
+    return [normalizeCueText(text)];
+  }
+
+  const overflowLimit = Math.max(maxWords + 3, Math.ceil(maxWords * 1.2));
+  const minWords = Math.max(6, Math.floor(maxWords * 0.6));
+  const parts: string[] = [];
+  let start = 0;
+
+  while (start < words.length) {
+    const remaining = words.length - start;
+    if (remaining <= maxWords) {
+      parts.push(words.slice(start).join(' '));
+      break;
+    }
+
+    let splitAt = -1;
+    const preferredEnd = Math.min(start + maxWords, words.length - 1);
+    const latestEnd = Math.min(start + overflowLimit, words.length - 1);
+
+    for (let end = preferredEnd; end >= start + minWords; end--) {
+      if (isSafeEnglishChunkBoundary(words.slice(start, latestEnd + 1), end - start)) {
+        splitAt = end;
+        break;
+      }
+    }
+
+    if (splitAt === -1) {
+      for (let end = preferredEnd + 1; end <= latestEnd; end++) {
+        if (isSafeEnglishChunkBoundary(words.slice(start, latestEnd + 1), end - start)) {
+          splitAt = end;
+          break;
+        }
+      }
+    }
+
+    if (splitAt === -1) {
+      splitAt = preferredEnd;
+    }
+
+    parts.push(words.slice(start, splitAt).join(' '));
+    start = splitAt;
+  }
+
+  return parts.filter(Boolean);
+}
+
+function splitCjkCueByLength(text: string, maxChars: number): string[] {
+  const normalized = normalizeCueText(text);
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  const minChars = Math.max(10, Math.floor(maxChars * 0.6));
+  const parts: string[] = [];
+  let remaining = normalized;
+
+  while (remaining.length > maxChars) {
+    let splitIndex = -1;
+
+    for (let index = maxChars; index >= minChars; index--) {
+      const left = remaining.slice(0, index).trim();
+      const right = remaining.slice(index).trim();
+      if (
+        left
+        && right
+        && /[，。！？；：、…]$/.test(left)
+        && !TRAILING_CONNECTOR_PATTERN.test(left)
+        && !LEADING_PUNCTUATION_PATTERN.test(right)
+      ) {
+        splitIndex = index;
+        break;
+      }
+    }
+
+    if (splitIndex === -1) {
+      for (let index = maxChars; index >= minChars; index--) {
+        const left = remaining.slice(0, index).trim();
+        const right = remaining.slice(index).trim();
+        if (
+          left
+          && right
+          && !TRAILING_CONNECTOR_PATTERN.test(left)
+          && !LEADING_PUNCTUATION_PATTERN.test(right)
+        ) {
+          splitIndex = index;
+          break;
+        }
+      }
+    }
+
+    if (splitIndex === -1) {
+      splitIndex = maxChars;
+    }
+
+    parts.push(remaining.slice(0, splitIndex).trim());
+    remaining = remaining.slice(splitIndex).trim();
+  }
+
+  if (remaining) {
+    parts.push(remaining);
+  }
+
+  return parts.filter(Boolean);
+}
+
+function splitReadableSourceCue(cue: SubtitleCue): SubtitleCue[] {
+  const normalizedText = normalizeCueText(cue.text);
+  const stats = getTextStats(normalizedText);
+  const config = getConfig();
+  const maxLength = stats.isCjk
+    ? Math.max(config.subtitle.renderMaxCharsCjk + 6, 24)
+    : Math.max(config.subtitle.renderMaxWords + 3, 15);
+
+  if (stats.length <= maxLength) {
+    return [{ ...cue, text: normalizedText }];
+  }
+
+  const parts = stats.isCjk
+    ? splitCjkCueByLength(normalizedText, maxLength)
+    : splitEnglishCueByLength(normalizedText, maxLength);
+
+  return distributeMonolingualCueDuration({ ...cue, text: normalizedText }, parts);
 }
 
 function combineCueTexts(texts: string[]): string {
@@ -396,7 +634,7 @@ export function optimizeSourceCues(
     .filter(cue => cue.text);
 
   if (options?.preserveTiming) {
-    return normalized;
+    return normalized.flatMap(cue => splitReadableSourceCue(cue));
   }
 
   return improveSourceCueQuality(normalized);

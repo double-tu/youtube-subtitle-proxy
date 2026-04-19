@@ -123,4 +123,81 @@ describe('prepareCuesForRender', () => {
     expect(prepared[0].startTime).toBe(0);
     expect(prepared[0].endTime).toBe(2300);
   });
+
+  it('splits CJK render lines at natural boundaries when possible', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 3000,
+        text: 'Original\n交易策略所遵循的顺序。所以请务必点赞并收藏视频',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared[0].text).toBe('交易策略所遵循的顺序。\n所以请务必点赞并收藏视频');
+  });
+
+  it('does not split embedded English tokens across CJK render lines', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 5000,
+        text: 'Original\n这个速成班分享给我的前夫 Mike Bagholder，没错，他真的非常需要。',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared[0].text.includes('Mike Ba\ngholder')).toBe(false);
+  });
+
+  it('moves dangling translation tails into the next cue when possible', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 5000,
+        text: 'Original 1\n请记得把这个速成班分享给需要的人。就我而言，我会把',
+      },
+      {
+        startTime: 5000,
+        endTime: 8000,
+        text: 'Original 2\n它分享给我的朋友。',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared.length).toBe(2);
+    expect(prepared[0].text).toContain('请记得把这个速成班分享给需要的人。');
+    expect(prepared[0].text.endsWith('我会把')).toBe(false);
+    expect(prepared[1].text.includes('我会把')).toBe(true);
+  });
+
+  it('splits long translation-only cues into shorter readable cues before rendering', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 9000,
+        text: 'Original\n这是第一句。这是第二句，现在继续讲第三句。',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].text.split('\n').length).toBeGreaterThan(1);
+  });
 });

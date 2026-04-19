@@ -116,7 +116,7 @@ function buildContextualTranslationPrompt(
   return `You are a senior subtitle translator. You must preserve meaning and tone while producing natural, fluent ${targetLanguage} subtitles.
 
 # Task
-Translate the Current Subtitle Batch into ${targetLanguage}. Use the Summary, Glossary, and Context Stream to keep names, tone, and references consistent.
+Translate each line in the Current Subtitle Batch into ${targetLanguage}. Use the Summary, Glossary, and Context Stream only to understand local context and keep names, tone, and references consistent.
 
 ${summarySection}${glossarySection}
 ## Context Stream
@@ -130,15 +130,18 @@ ${formatBatchLines(batch.following)}
 ${formatBatchLines(batch.current)}
 
 # Translation Rules
-1. Semantic fusion: join fragmented lines into complete sentences in your head, then split back to the original line IDs.
-2. Use context to resolve pronouns and implied subjects.
-3. Use the Glossary to keep proper nouns and key terms consistent.
-4. Keep translation length close to the original to avoid readability issues.
+1. Translate each Current Subtitle Batch ID independently. The translation for an ID must correspond only to that ID's source text.
+2. Do not omit, merge, move, reorder, summarize, or redistribute meaning across IDs.
+3. Use preceding and following context only to resolve pronouns, implied subjects, and terminology.
+4. If a source line is a sentence fragment, translate it as a natural subtitle fragment for that same ID; do not complete it with text from neighboring IDs.
+5. Keep translation length close to the source line to avoid readability issues.
+6. Use the Glossary to keep proper nouns and key terms consistent.
 
 # Output Requirements
 Return only a JSON array with exactly ${batch.current.length} items.
 Each item must be: {"id": <number>, "translation": "<text>"}
-IDs must match the bracketed indices in Current Subtitle Batch.`;
+IDs must match the bracketed indices in Current Subtitle Batch.
+The output array must be in the same order as Current Subtitle Batch.`;
 }
 
 function formatBatchLines(lines: Array<{ index: number; text: string }>): string {
@@ -377,6 +380,33 @@ type TranslationRange = {
   label: string;
 };
 
+function visibleLength(text: string): number {
+  return text.replace(/\s+/g, '').length;
+}
+
+function isPunctuationOnly(text: string): boolean {
+  return /^[\p{P}\p{S}\s]+$/u.test(text.trim());
+}
+
+function isSuspiciousContextTranslation(sourceText: string, translation: string): boolean {
+  const sourceLength = visibleLength(sourceText);
+  const translationLength = visibleLength(translation);
+
+  if (!translation.trim() || isPunctuationOnly(translation)) {
+    return true;
+  }
+
+  if (sourceLength >= 18 && translationLength <= 3) {
+    return true;
+  }
+
+  if (sourceLength >= 35 && translationLength <= 6) {
+    return true;
+  }
+
+  return false;
+}
+
 async function buildTranslationGuidance(
   cues: SubtitleCue[],
   targetLang: string
@@ -492,24 +522,31 @@ export async function translateBatchWithContext(
 
     let nextRangeIndex = 0;
 
+    const fallbackSingleLineByIndex = async (
+      index: number,
+      reason: string
+    ) => {
+      const cue = cues[index];
+      try {
+        const translation = await translateText(cue.text, targetLang);
+        translatedTexts[index] = translation;
+        console.log(
+          `[Translator] Single-line fallback completed for segment ${index}: ${reason}`
+        );
+      } catch (error) {
+        console.error(
+          `[Translator] Single-line fallback failed for segment ${index}:`,
+          error
+        );
+        translatedTexts[index] = cue.text;
+      }
+    };
+
     const fallbackSingleLine = async (
       range: TranslationRange,
       reason: string
     ) => {
-      const cue = cues[range.start];
-      try {
-        const translation = await translateText(cue.text, targetLang);
-        translatedTexts[range.start] = translation;
-        console.log(
-          `[Translator] Single-line fallback completed for segment ${range.start} after batch failure: ${reason}`
-        );
-      } catch (error) {
-        console.error(
-          `[Translator] Single-line fallback failed for segment ${range.start}:`,
-          error
-        );
-        translatedTexts[range.start] = cue.text;
-      }
+      await fallbackSingleLineByIndex(range.start, reason);
     };
 
     const runBatch = async (range: TranslationRange) => {
@@ -568,6 +605,23 @@ export async function translateBatchWithContext(
             if (!translatedTexts[id]) {
               throw new Error(`Missing translation for id ${id} in batch ${start}-${end - 1}`);
             }
+          }
+
+          const suspiciousIds = batch.current
+            .filter(item => isSuspiciousContextTranslation(
+              item.text,
+              translatedTexts[item.index] ?? ''
+            ))
+            .map(item => item.index);
+
+          if (suspiciousIds.length > 0) {
+            console.warn(
+              `[Translator] Context batch ${label} has suspicious translations for segments ${suspiciousIds.join(', ')}; falling back per-line`
+            );
+            await Promise.all(suspiciousIds.map(id => fallbackSingleLineByIndex(
+              id,
+              `suspicious context translation in batch ${label}`
+            )));
           }
 
           console.log(

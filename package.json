@@ -8,6 +8,7 @@
     "dev": "tsx watch src/http/server.ts",
     "build": "tsc",
     "start": "node dist/http/server.js",
+    "verify:subtitle": "tsx scripts/verify-subtitle-pipeline.ts",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint src --ext .ts",

@@ -7,10 +7,76 @@ import type { YouTubeTimedTextEvent, YouTubeTimedTextResponse, SubtitleCue } fro
 
 const SENTENCE_END_PATTERN = /[,.;!?，。！？；…]$/;
 const ESTIMATED_SEG_DURATION_MS = 200;
-const MAX_SCROLLING_ASR_CJK_CHARS = 30;
-const MAX_SCROLLING_ASR_WORDS = 15;
+const MAX_SCROLLING_ASR_CJK_CHARS = 34;
+const MAX_SCROLLING_ASR_WORDS = 20;
+const MAX_SCROLLING_ASR_CJK_OVERFLOW = 8;
+const MAX_SCROLLING_ASR_WORD_OVERFLOW = 5;
 const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const WHITESPACE_PATTERN = /\s+/g;
+const UNSAFE_TRAILING_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'because',
+  'been',
+  'being',
+  'but',
+  'by',
+  'can',
+  'could',
+  'did',
+  'do',
+  'does',
+  'for',
+  'from',
+  'had',
+  'has',
+  'have',
+  'i',
+  'if',
+  'in',
+  'into',
+  'is',
+  'it',
+  'may',
+  'might',
+  'must',
+  'of',
+  'on',
+  'or',
+  'our',
+  'over',
+  'should',
+  'so',
+  'that',
+  'the',
+  'their',
+  'then',
+  'there',
+  'these',
+  'this',
+  'those',
+  'to',
+  'under',
+  'was',
+  'we',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'who',
+  'will',
+  'with',
+  'would',
+  'you',
+  'your',
+]);
 
 function isScrollingAsrEventStream(events: YouTubeTimedTextEvent[]): boolean {
   return events.some(event => event.wWinId !== undefined && event.aAppend === 1);
@@ -41,6 +107,47 @@ function getTextLength(text: string): number {
 
 function getMaxScrollingAsrLength(text: string): number {
   return isCjkText(text) ? MAX_SCROLLING_ASR_CJK_CHARS : MAX_SCROLLING_ASR_WORDS;
+}
+
+function getMaxScrollingAsrOverflow(text: string): number {
+  return isCjkText(text) ? MAX_SCROLLING_ASR_CJK_OVERFLOW : MAX_SCROLLING_ASR_WORD_OVERFLOW;
+}
+
+function getLastWord(text: string): string {
+  const match = normalizeText(text).match(/[A-Za-z][A-Za-z'-]*$/);
+  return match ? match[0].toLowerCase() : '';
+}
+
+function hasUnsafeTrailingBoundary(text: string): boolean {
+  const normalized = normalizeText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  if (isCjkText(normalized)) {
+    return /(?:和|与|或|而|并|从|向|给|把|被|对|在|为|将|让|跟|比|及)$/.test(normalized);
+  }
+
+  const lastWord = getLastWord(normalized);
+  return UNSAFE_TRAILING_WORDS.has(lastWord) || /-$/.test(lastWord);
+}
+
+function shouldSplitScrollingCue(text: string, reachedSentenceEnd: boolean): boolean {
+  if (reachedSentenceEnd) {
+    return true;
+  }
+
+  const length = getTextLength(text);
+  const maxLength = getMaxScrollingAsrLength(text);
+  if (length < maxLength) {
+    return false;
+  }
+
+  if (!hasUnsafeTrailingBoundary(text)) {
+    return true;
+  }
+
+  return length >= maxLength + getMaxScrollingAsrOverflow(text);
 }
 
 function pushCue(cues: SubtitleCue[], cue: SubtitleCue): void {
@@ -138,8 +245,7 @@ function parseScrollingAsrTimedText(events: YouTubeTimedTextEvent[]): SubtitleCu
 
       const mergedText = normalizeText(currentText);
       const reachedSentenceEnd = SENTENCE_END_PATTERN.test(trimmed);
-      const reachedMaxLength = getTextLength(mergedText) >= getMaxScrollingAsrLength(mergedText);
-      if (reachedSentenceEnd || reachedMaxLength) {
+      if (shouldSplitScrollingCue(mergedText, reachedSentenceEnd)) {
         pendingSplit = true;
       }
     }
