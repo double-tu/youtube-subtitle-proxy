@@ -27,6 +27,9 @@ vi.mock('../src/config/env.js', () => ({
       bilingualMaxCharsCjk: 22,
       bilingualMaxWords: 14,
       bilingualMinDurationMs: 1200,
+      renderMaxCharsCjk: 20,
+      renderMaxWords: 12,
+      outputMode: 'translation-only',
     },
   }),
 }));

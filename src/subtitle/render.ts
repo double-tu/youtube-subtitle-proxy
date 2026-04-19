@@ -6,6 +6,7 @@
 import { getConfig } from '../config/env.js';
 import type {
   SubtitleCue,
+  SubtitleOutputMode,
   SubtitleRenderFormat,
   YouTubeTimedTextResponse,
 } from '../types/subtitle.js';
@@ -68,24 +69,26 @@ function normalizeCueForFormat(cue: SubtitleCue, format: SubtitleRenderFormat): 
   const config = getConfig();
   const [originalLine = '', ...translationLines] = cue.text.split(/\r?\n/);
   const translationLine = translationLines.join(' ').trim();
+  const outputMode = config.subtitle.outputMode;
+  const outputText = selectOutputText(originalLine, translationLine, outputMode);
   const cjkLimit = config.subtitle.renderMaxCharsCjk;
   const wordLimit = config.subtitle.renderMaxWords;
-  const originalLimit = isCjkText(originalLine) ? cjkLimit : wordLimit;
-  const translationLimit = isCjkText(translationLine) ? cjkLimit : wordLimit;
-  const originalChunks = splitForRender(originalLine, originalLimit);
-  const translationChunks = splitForRender(translationLine, translationLimit);
+  const primaryLimit = isCjkText(outputText.primary) ? cjkLimit : wordLimit;
+  const secondaryLimit = isCjkText(outputText.secondary) ? cjkLimit : wordLimit;
+  const primaryChunks = splitForRender(outputText.primary, primaryLimit);
+  const secondaryChunks = splitForRender(outputText.secondary, secondaryLimit);
 
-  if (!translationLine) {
+  if (!outputText.secondary) {
     return {
       ...cue,
-      text: originalChunks.join('\n'),
+      text: primaryChunks.join('\n'),
     };
   }
 
   if (format === 'srv3') {
     return {
       ...cue,
-      text: `${originalChunks[0] ?? originalLine}\n${translationChunks[0] ?? translationLine}`,
+      text: `${primaryChunks[0] ?? outputText.primary}\n${secondaryChunks[0] ?? outputText.secondary}`,
     };
   }
 
@@ -93,8 +96,8 @@ function normalizeCueForFormat(cue: SubtitleCue, format: SubtitleRenderFormat): 
     return {
       ...cue,
       text: [
-        ...originalChunks,
-        ...translationChunks,
+        ...primaryChunks,
+        ...secondaryChunks,
       ].filter(Boolean).join('\n'),
     };
   }
@@ -102,9 +105,34 @@ function normalizeCueForFormat(cue: SubtitleCue, format: SubtitleRenderFormat): 
   return {
     ...cue,
     text: [
-      ...originalChunks,
-      ...translationChunks,
+      ...primaryChunks,
+      ...secondaryChunks,
     ].filter(Boolean).join('\n'),
+  };
+}
+
+function selectOutputText(
+  originalLine: string,
+  translationLine: string,
+  outputMode: SubtitleOutputMode
+): { primary: string; secondary: string } {
+  if (outputMode === 'bilingual') {
+    return {
+      primary: originalLine.trim(),
+      secondary: translationLine.trim(),
+    };
+  }
+
+  if (outputMode === 'original-only') {
+    return {
+      primary: originalLine.trim(),
+      secondary: '',
+    };
+  }
+
+  return {
+    primary: translationLine.trim() || originalLine.trim(),
+    secondary: '',
   };
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseYouTubeSrv3 } from '../src/subtitle/parse.js';
 import {
   prepareCuesForRender,
@@ -6,6 +6,17 @@ import {
   renderYouTubeTimedText,
 } from '../src/subtitle/render.js';
 import type { SubtitleCue } from '../src/types/subtitle.js';
+
+const baseEnv = { ...process.env };
+
+beforeEach(() => {
+  process.env = { ...baseEnv };
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-key';
+});
+
+afterEach(() => {
+  process.env = { ...baseEnv };
+});
 
 describe('renderYouTubeSrv3', () => {
   it('clamps duration to avoid overlap with next cue', () => {
@@ -45,6 +56,7 @@ describe('renderYouTubeTimedText', () => {
 
 describe('prepareCuesForRender', () => {
   it('keeps srv3 cues to two stable lines', () => {
+    process.env.SUBTITLE_OUTPUT_MODE = 'bilingual';
     const cues: SubtitleCue[] = [
       {
         startTime: 0,
@@ -59,6 +71,7 @@ describe('prepareCuesForRender', () => {
   });
 
   it('allows json3 cues to preserve controlled multiline output', () => {
+    process.env.SUBTITLE_OUTPUT_MODE = 'bilingual';
     const cues: SubtitleCue[] = [
       {
         startTime: 0,
@@ -70,5 +83,20 @@ describe('prepareCuesForRender', () => {
     const prepared = prepareCuesForRender(cues, 'json3');
 
     expect(prepared[0].text.split('\n').length).toBeGreaterThan(2);
+  });
+
+  it('defaults to translation-only output when not configured', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    const cues: SubtitleCue[] = [
+      {
+        startTime: 0,
+        endTime: 3000,
+        text: 'Original subtitle line\n译文字幕',
+      },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'srv3');
+
+    expect(prepared[0].text).toBe('译文字幕');
   });
 });

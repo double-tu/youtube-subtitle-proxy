@@ -68,6 +68,7 @@ const envSchema = z.object({
   SUBTITLE_BILINGUAL_MIN_DURATION_MS: z.string().default('1200').transform(Number),
   SUBTITLE_RENDER_MAX_CHARS_CJK: z.string().default('20').transform(Number),
   SUBTITLE_RENDER_MAX_WORDS: z.string().default('12').transform(Number),
+  SUBTITLE_OUTPUT_MODE: z.enum(['translation-only', 'bilingual', 'original-only']).default('translation-only'),
 
   // Admin (optional)
   ADMIN_TOKEN: z.string().optional(),
@@ -158,6 +159,7 @@ function loadEnv(): AppConfig {
       bilingualMinDurationMs: env.SUBTITLE_BILINGUAL_MIN_DURATION_MS,
       renderMaxCharsCjk: env.SUBTITLE_RENDER_MAX_CHARS_CJK,
       renderMaxWords: env.SUBTITLE_RENDER_MAX_WORDS,
+      outputMode: env.SUBTITLE_OUTPUT_MODE,
     },
 
     admin: {

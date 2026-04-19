@@ -180,6 +180,7 @@ OPENAI_MODEL=llama3-chinese
 | `SUBTITLE_BILINGUAL_MIN_DURATION_MS` | 1200 | 双语重排允许拆 cue 的最小时长 |
 | `SUBTITLE_RENDER_MAX_CHARS_CJK` | 20 | 渲染到播放器前，CJK 单行最大字符数 |
 | `SUBTITLE_RENDER_MAX_WORDS` | 12 | 渲染到播放器前，非 CJK 单行最大词数 |
+| `SUBTITLE_OUTPUT_MODE` | `translation-only` | 输出模式，可选 `translation-only`、`bilingual`、`original-only` |
 | `SRV3_OVERLAP_GAP_MS` | 100 | SRV3 字幕重叠缓冲（毫秒），避免 App 合并相邻行 |
 
 ### 完整配置示例
@@ -219,6 +220,7 @@ SUBTITLE_BILINGUAL_MAX_WORDS=14
 SUBTITLE_BILINGUAL_MIN_DURATION_MS=1200
 SUBTITLE_RENDER_MAX_CHARS_CJK=20
 SUBTITLE_RENDER_MAX_WORDS=12
+SUBTITLE_OUTPUT_MODE=translation-only
 
 # 数据库配置
 DB_PATH=./data/subtitles.db

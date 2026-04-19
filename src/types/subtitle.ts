@@ -13,6 +13,7 @@ export interface SubtitleCue {
 }
 
 export type SubtitleRenderFormat = 'vtt' | 'json3' | 'srv3';
+export type SubtitleOutputMode = 'translation-only' | 'bilingual' | 'original-only';
 
 export interface YouTubeTimedTextEvent {
   tStartMs: number;
@@ -190,6 +191,7 @@ export interface AppConfig {
     bilingualMinDurationMs: number;
     renderMaxCharsCjk: number;
     renderMaxWords: number;
+    outputMode: SubtitleOutputMode;
   };
 
   admin: {
