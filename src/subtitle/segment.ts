@@ -53,6 +53,7 @@ const PAUSE_WORDS = new Set([
   'well',
   'while',
 ]);
+const STRONG_SENTENCE_END_PATTERN = /[.!?。！？…]$/;
 const COMPACT_CUE_MAX_GAP_MS = 1000;
 
 type TextStats = {
