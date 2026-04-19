@@ -138,6 +138,18 @@ describe('compactShortCues', () => {
     expect(compacted[0].text).toBe('Stop.');
     expect(compacted[1].text).toBe('Now go');
   });
+
+  it('rebalances a short trailing cue into the previous cue', () => {
+    const cues = [
+      { startTime: 0, endTime: 800, text: 'This is a complete compact line' },
+      { startTime: 800, endTime: 1200, text: 'for now' },
+    ];
+
+    const compacted = compactShortCues(cues);
+
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0].text).toBe('This is a complete compact line for now');
+  });
 });
 
 describe('optimizeBilingualCues', () => {

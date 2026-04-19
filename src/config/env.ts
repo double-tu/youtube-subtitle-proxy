@@ -173,6 +173,10 @@ function loadEnv(): AppConfig {
 // Singleton config instance
 let config: AppConfig | null = null;
 
+export function resetConfigForTests(): void {
+  config = null;
+}
+
 /**
  * Get application configuration
  */
@@ -199,4 +203,5 @@ export function getConfig(): AppConfig {
 
 export default {
   getConfig,
+  resetConfigForTests,
 };

@@ -9,6 +9,9 @@ import { getConfig } from '../config/env.js';
 const SPEAKER_PREFIX_PATTERN = /^>>\s*/;
 const REPEATED_CHEVRON_PATTERN = />>/g;
 const SYMBOL_START_PATTERN = /^[[(♪]/;
+const LEADING_PUNCTUATION_PATTERN = /^[,.;:!?，。！？；：、]/;
+const TRAILING_CONNECTOR_PATTERN = /(?:和|与|或|而|并|从|向|给|把|被|对|在|为|将|让|跟|比|及)$/;
+const PUNCTUATION_ONLY_PATTERN = /^[\p{P}\p{S}\s]+$/u;
 const PAUSE_WORDS = new Set([
   'actually',
   'also',
@@ -103,6 +106,28 @@ function getBilingualLimit(text: string): number {
     : config.subtitle.bilingualMaxWords;
 }
 
+function isLikelyDanglingText(text: string): boolean {
+  const normalized = normalizeCueText(text);
+  if (!normalized || SYMBOL_START_PATTERN.test(normalized)) {
+    return false;
+  }
+
+  if (PUNCTUATION_ONLY_PATTERN.test(normalized) || LEADING_PUNCTUATION_PATTERN.test(normalized)) {
+    return true;
+  }
+
+  const stats = getTextStats(normalized);
+  if (stats.isCjk) {
+    if (stats.length <= 6) {
+      return true;
+    }
+
+    return TRAILING_CONNECTOR_PATTERN.test(normalized);
+  }
+
+  return stats.length <= 3 && !STRONG_SENTENCE_END_PATTERN.test(normalized);
+}
+
 function splitSentenceParts(text: string): string[] {
   const normalized = normalizeCueText(text);
   if (!normalized) {
@@ -144,10 +169,12 @@ function shouldKeepCompactBoundary(left: SubtitleCue, right: SubtitleCue): boole
   const gap = right.startTime - left.endTime;
   const leftText = left.text.trim();
   const rightText = right.text.trim();
+  const leftDangling = isLikelyDanglingText(leftText);
+  const rightDangling = isLikelyDanglingText(rightText);
 
   return gap > COMPACT_CUE_MAX_GAP_MS
-    || STRONG_SENTENCE_END_PATTERN.test(leftText)
-    || SYMBOL_START_PATTERN.test(rightText);
+    || (STRONG_SENTENCE_END_PATTERN.test(leftText) && !leftDangling)
+    || (SYMBOL_START_PATTERN.test(rightText) && !rightDangling);
 }
 
 function shouldKeepBoundary(left: SubtitleCue, right: SubtitleCue): boolean {
@@ -220,6 +247,25 @@ function rebalanceSourceCues(cues: SubtitleCue[]): SubtitleCue[] {
     }
 
     result.push(current);
+  }
+
+  for (let i = result.length - 1; i > 0; i--) {
+    const current = result[i];
+    const currentStats = getTextStats(current.text);
+    const bounds = getTargetBounds(currentStats.isCjk);
+    if (currentStats.length >= bounds.min) {
+      continue;
+    }
+
+    const previous = result[i - 1];
+    const previousStats = getTextStats(previous.text);
+    const combinedLength = previousStats.length + currentStats.length;
+    if (combinedLength > bounds.max || shouldKeepCompactBoundary(previous, current)) {
+      continue;
+    }
+
+    result[i - 1] = mergeCuePair(previous, current);
+    result.splice(i, 1);
   }
 
   return result;
@@ -388,7 +434,11 @@ export function compactShortCues(cues: SubtitleCue[]): SubtitleCue[] {
 
       const nextStats = getTextStats(next.text);
       const combinedLength = currentLength + nextStats.length;
-      if (combinedLength > bounds.max) {
+      const allowOverflow = isLikelyDanglingText(current.text) || isLikelyDanglingText(next.text);
+      const maxLength = allowOverflow
+        ? bounds.max + (currentStats.isCjk ? 10 : 4)
+        : bounds.max;
+      if (combinedLength > maxLength) {
         break;
       }
 
@@ -398,6 +448,29 @@ export function compactShortCues(cues: SubtitleCue[]): SubtitleCue[] {
     }
 
     result.push(current);
+  }
+
+  for (let i = result.length - 1; i > 0; i--) {
+    const current = result[i];
+    const currentStats = getTextStats(current.text);
+    const bounds = getTargetBounds(currentStats.isCjk);
+    if (currentStats.length >= bounds.min && !isLikelyDanglingText(current.text)) {
+      continue;
+    }
+
+    const previous = result[i - 1];
+    const previousStats = getTextStats(previous.text);
+    const combinedLength = previousStats.length + currentStats.length;
+    const allowOverflow = isLikelyDanglingText(previous.text) || isLikelyDanglingText(current.text);
+    const maxLength = allowOverflow
+      ? bounds.max + (currentStats.isCjk ? 10 : 4)
+      : bounds.max;
+    if (combinedLength > maxLength || shouldKeepCompactBoundary(previous, current)) {
+      continue;
+    }
+
+    result[i - 1] = mergeCuePair(previous, current);
+    result.splice(i, 1);
   }
 
   return result;

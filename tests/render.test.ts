@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { resetConfigForTests } from '../src/config/env.js';
 import { parseYouTubeSrv3 } from '../src/subtitle/parse.js';
 import {
   prepareCuesForRender,
@@ -16,10 +17,12 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...baseEnv };
+  resetConfigForTests();
 });
 
 describe('renderYouTubeSrv3', () => {
   it('clamps duration to avoid overlap with next cue', () => {
+    process.env.SUBTITLE_OUTPUT_MODE = 'bilingual';
     const cues: SubtitleCue[] = [
       { startTime: 0, endTime: 5000, text: 'First line\n第一行' },
       { startTime: 3000, endTime: 8000, text: 'Second line\n第二行' },
@@ -36,6 +39,7 @@ describe('renderYouTubeSrv3', () => {
 
 describe('renderYouTubeTimedText', () => {
   it('prepends a window init event for json3 playback', () => {
+    process.env.SUBTITLE_OUTPUT_MODE = 'bilingual';
     const cues: SubtitleCue[] = [
       { startTime: 1200, endTime: 3200, text: 'Hello\n你好' },
       { startTime: 4000, endTime: 6200, text: 'World\n世界' },
@@ -76,7 +80,7 @@ describe('prepareCuesForRender', () => {
       {
         startTime: 0,
         endTime: 4000,
-        text: 'This is a long original subtitle line that should be normalized for json3 output\n这是一条很长的译文字幕，需要在 json3 输出时进行受控换行',
+        text: 'This is a long original subtitle line that should be normalized for json3 output with extra words for multiline rendering\n这是一条很长的译文字幕，需要在 json3 输出时进行受控换行，并且这里补充更多内容来确保产生多行',
       },
     ];
 
@@ -87,6 +91,7 @@ describe('prepareCuesForRender', () => {
 
   it('defaults to translation-only output when not configured', () => {
     delete process.env.SUBTITLE_OUTPUT_MODE;
+    resetConfigForTests();
     const cues: SubtitleCue[] = [
       {
         startTime: 0,
@@ -98,5 +103,24 @@ describe('prepareCuesForRender', () => {
     const prepared = prepareCuesForRender(cues, 'srv3');
 
     expect(prepared[0].text).toBe('译文字幕');
+  });
+
+  it('compacts tiny translation-only cues before json3 rendering', () => {
+    delete process.env.SUBTITLE_OUTPUT_MODE;
+    process.env.SUBTITLE_RENDER_MAX_CHARS_CJK = '20';
+    resetConfigForTests();
+    const cues: SubtitleCue[] = [
+      { startTime: 0, endTime: 500, text: 'First\n这' },
+      { startTime: 500, endTime: 900, text: 'Second\n是一个' },
+      { startTime: 900, endTime: 1400, text: 'Third\n测试' },
+      { startTime: 1400, endTime: 2300, text: 'Fourth\n字幕' },
+    ];
+
+    const prepared = prepareCuesForRender(cues, 'json3');
+
+    expect(prepared).toHaveLength(1);
+    expect(prepared[0].text).toBe('这是一个测试字幕');
+    expect(prepared[0].startTime).toBe(0);
+    expect(prepared[0].endTime).toBe(2300);
   });
 });
