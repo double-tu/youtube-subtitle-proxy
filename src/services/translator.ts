@@ -669,11 +669,26 @@ export async function restoreSourceCues(
   const precedingLines = Math.max(0, Math.min(config.translationContext.precedingContextLines, 2));
   const followingLines = Math.max(0, Math.min(config.translationContext.followingContextLines, 2));
   const ranges = buildDynamicTranslationRanges(cues, batchSize, Math.max(600, Math.floor(config.translationContext.maxTokens * 1.5)));
+  const totalBatches = Math.max(1, ranges.length);
+  const batchConcurrency = Math.max(
+    1,
+    Math.min(config.translationContext.concurrency, totalBatches)
+  );
+  const overallStart = Date.now();
   const restoredTexts: Array<string | null> = new Array(cues.length).fill(null);
 
-  for (const range of ranges) {
+  console.log(
+    `[Translator] Source restore started: ${cues.length} segments, batches=${totalBatches}, maxBatchItems=${batchSize}, concurrency=${batchConcurrency}, preceding=${precedingLines}, following=${followingLines}`
+  );
+
+  const runRange = async (range: TranslationRange) => {
     const batch = buildContextBatch(cues, range.start, range.end, precedingLines, followingLines);
     const prompt = buildSourceRestorePrompt(batch);
+    const rangeStart = Date.now();
+
+    console.log(
+      `[Translator] Source restore batch ${range.label} started: segments ${range.start}-${range.end - 1}`
+    );
 
     try {
       const response = await client.chat.completions.create({
@@ -692,12 +707,41 @@ export async function restoreSourceCues(
       for (const item of parsed) {
         restoredTexts[item.id] = item.restored;
       }
+
+      console.log(
+        `[Translator] Source restore batch ${range.label} completed in ${Date.now() - rangeStart}ms`
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[Translator] Source restore failed for range ${range.label}, keeping original text: ${message}`);
+      console.warn(
+        `[Translator] Source restore batch ${range.label} failed in ${Date.now() - rangeStart}ms, keeping original text: ${message}`
+      );
       for (let index = range.start; index < range.end; index++) {
         restoredTexts[index] = cues[index].text;
       }
+    }
+  };
+
+  let nextRangeIndex = 0;
+  const workers = Array.from({ length: batchConcurrency }, async () => {
+    while (true) {
+      const rangeIndex = nextRangeIndex++;
+      if (rangeIndex >= ranges.length) {
+        break;
+      }
+      await runRange(ranges[rangeIndex]);
+    }
+  });
+
+  await Promise.all(workers);
+
+  console.log(
+    `[Translator] Source restore completed in ${Date.now() - overallStart}ms`
+  );
+
+  for (let index = 0; index < cues.length; index++) {
+    if (!restoredTexts[index]) {
+      restoredTexts[index] = cues[index].text;
     }
   }
 
